@@ -68,6 +68,21 @@ function AccountPanel({
   // Saved-login form state. The password is cleared after use.
   const [loginName, setLoginName] = useState(account.steam?.accountName ?? "");
   const [loginPassword, setLoginPassword] = useState("");
+  // True when the fields were filled with the login generated during signup.
+  const [fromSignup, setFromSignup] = useState(false);
+
+  // Fills the form with the signup's generated login, if this account was just created.
+  useEffect(() => {
+    window.sah
+      .getLoginDraft(account.id)
+      .then((draft) => {
+        if (!draft) return;
+        setLoginName(draft.accountName);
+        setLoginPassword(draft.password);
+        setFromSignup(true);
+      })
+      .catch(() => undefined);
+  }, [account.id]);
   const [loginGuard, setLoginGuard] = useState<LoginStart | null>(null);
   const [guardCode, setGuardCode] = useState("");
   const [manualValue, setManualValue] = useState("");
@@ -122,12 +137,17 @@ function AccountPanel({
     setNotice(result.message);
     setLoginGuard(null);
     setGuardCode("");
+    setFromSignup(false);
   }
 
   async function startSavedLogin() {
-    setBusy(true);
     setError(null);
     setNotice(null);
+    if (/^\d{17}$/.test(loginName.trim())) {
+      setError("Enter the Steam account name (login name), not the SteamID64.");
+      return;
+    }
+    setBusy(true);
     try {
       const start = await window.sah.loginStart({
         accountId: account.id,
@@ -223,9 +243,11 @@ function AccountPanel({
 
       <Section icon="key" title="Saved login">
         <p className="muted small">
-          {account.loginSaved
-            ? "Refresh token saved in the encrypted vault. Save again if it is rejected."
-            : "The password is not stored. Only a refresh token is kept, encrypted in the vault."}
+          {fromSignup
+            ? "Filled with the login generated during signup. Save login again to keep it current."
+            : account.loginSaved
+              ? "Refresh token saved in the encrypted vault. Save again if it is rejected."
+              : "The password is not stored. Only a refresh token is kept, encrypted in the vault."}
         </p>
         {loginGuard ? (
           <div className="row">

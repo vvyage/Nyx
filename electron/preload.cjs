@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+﻿const { contextBridge, ipcRenderer } = require("electron");
 
 // Narrow API surface: the renderer cannot reach Node or arbitrary IPC channels.
 contextBridge.exposeInMainWorld("sah", {
@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld("sah", {
   signupStatus: () => ipcRenderer.invoke("signup:status"),
   signupComplete: (input) => ipcRenderer.invoke("signup:complete", input),
   signupCancel: () => ipcRenderer.invoke("signup:cancel"),
+  getAppVersion: () => ipcRenderer.invoke("app:version"),
+  getLoginDraft: (id) => ipcRenderer.invoke("accounts:loginDraft", id),
+  getMailSettings: () => ipcRenderer.invoke("mail:get"),
+  saveMailSettings: (input) => ipcRenderer.invoke("mail:save", input),
+  clearMailSettings: () => ipcRenderer.invoke("mail:clear"),
   getUpdateStatus: () => ipcRenderer.invoke("update:status"),
   downloadUpdate: () => ipcRenderer.invoke("update:download"),
   installUpdate: () => ipcRenderer.invoke("update:install"),

@@ -50,22 +50,30 @@ function presenceScript() {
   })()`;
 }
 
-// Fills only the empty fields named in values, so user edits are never overwritten.
-function fillScript(values) {
+// Focuses one field if it is still empty. Returns false when it is missing or already filled.
+function focusScript(key) {
   return `(() => {
-    const fields = ${JSON.stringify(FIELDS)};
-    const values = ${JSON.stringify(values)};
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    for (const [key, selectors] of Object.entries(fields)) {
-      if (!(key in values)) continue;
-      const el = selectors.map((s) => document.querySelector(s)).find(Boolean);
-      if (!el || el.value !== "") continue;
-      setValue.call(el, values[key]);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    const selectors = ${JSON.stringify(FIELDS)}[${JSON.stringify(key)}] || [];
+    const el = selectors.map((s) => document.querySelector(s)).find(Boolean);
+    if (!el || el.value !== "") return false;
+    el.focus();
+    return true;
   })()`;
 }
+
+// Leaves a field after its text is entered, so the page runs its validation the way it does
+// when a user tabs away. Steam's form rejects a value set without these events.
+function blurScript(key) {
+  return `(() => {
+    const selectors = ${JSON.stringify(FIELDS)}[${JSON.stringify(key)}] || [];
+    const el = selectors.map((s) => document.querySelector(s)).find(Boolean);
+    if (el) el.blur();
+    return true;
+  })()`;
+}
+
+// Order matters: the confirm fields repeat the value above them.
+const FILL_ORDER = ["email", "emailConfirm", "accountName", "password", "passwordConfirm"];
 
 function valuesFor(session) {
   return {
@@ -159,18 +167,23 @@ function openEmbedded(session) {
   win.loadURL(JOIN_URL).catch((error) => setMessage(session, `Could not load Steam: ${error.message}`));
 }
 
+// Types each empty field with insertText, which sends real input events like a paste does.
+// Setting .value directly left Steam's form thinking the password was empty.
 async function fillForm(session) {
   if (session.checking || active !== session || !session.win || session.win.isDestroyed()) return;
   session.checking = true;
   try {
-    const present = await session.win.webContents.executeJavaScript(presenceScript(), true);
+    const wc = session.win.webContents;
+    const present = await wc.executeJavaScript(presenceScript(), true);
     const wanted = valuesFor(session);
-    const values = {};
-    for (const [key, empty] of Object.entries(present)) {
-      if (empty && key in wanted) values[key] = wanted[key];
-    }
-    if (Object.keys(values).length > 0) {
-      await session.win.webContents.executeJavaScript(fillScript(values), true);
+    for (const key of FILL_ORDER) {
+      if (!present[key] || !(key in wanted)) continue;
+      wc.focus();
+      const focused = await wc.executeJavaScript(focusScript(key), true);
+      if (!focused) continue;
+      await wc.insertText(wanted[key]);
+      await sleep(150);
+      await wc.executeJavaScript(blurScript(key), true);
     }
   } catch {
     // The page may be navigating; the next tick tries again.

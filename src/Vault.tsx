@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { VaultStatus } from "./types";
+import { UpdateButton } from "./shared";
 
 const MIN_PASSWORD = 10;
 
@@ -128,6 +129,7 @@ export function VaultUnlock({ onDone }: { onDone: (status: VaultStatus) => void 
         <button className="ghost small" onClick={() => setUseCode(!useCode)}>
           {useCode ? "Use master password" : "Use recovery code instead"}
         </button>
+        <UpdateButton onError={setError} />
       </div>
     </div>
   );

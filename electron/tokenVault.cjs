@@ -85,6 +85,24 @@ function createTokenVault(filePath) {
     removeToken(steamId64) {
       storeRecords(records().filter((item) => item.steamId64 !== steamId64));
     },
+
+    // Mailbox settings for the signup watcher (email, IMAP host, port, login, and password).
+    // Stored encrypted with the tokens, as a record without a steamId64.
+    getMailSettings() {
+      const record = records().find((item) => item.kind === "mail");
+      if (!record) return null;
+      return { email: record.email, host: record.host, port: record.port, user: record.user, password: record.password };
+    },
+
+    saveMailSettings({ email, host, port, user, password }) {
+      const list = records().filter((item) => item.kind !== "mail");
+      list.push({ kind: "mail", email, host, port, user, password, savedAt: new Date().toISOString() });
+      storeRecords(list);
+    },
+
+    removeMailSettings() {
+      storeRecords(records().filter((item) => item.kind !== "mail"));
+    },
   };
 }
 

@@ -89,3 +89,29 @@ test("the vault file does not contain the plaintext token", async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("mail settings are stored encrypted and do not disturb saved tokens", async () => {
+  const { dir, file } = tempFile();
+  try {
+    const store = createTokenVault(file);
+    await store.setup(PASSWORD);
+    assert.equal(store.getMailSettings(), null);
+    store.saveToken("76561198000000001", "token-a");
+    store.saveMailSettings({ email: "me@gmail.com", host: "imap.gmail.com", port: 993, user: "me@gmail.com", password: "abcd efgh ijkl mnop" });
+    store.saveMailSettings({ email: "me@gmail.com", host: "imap.gmail.com", port: 993, user: "me@gmail.com", password: "new app pass 1234" });
+    assert.equal(store.getMailSettings().password, "new app pass 1234");
+    assert.equal(store.getToken("76561198000000001"), "token-a");
+
+    const raw = fs.readFileSync(file, "utf8");
+    assert.ok(!raw.includes("new app pass"), "mail password must not be stored in plaintext");
+
+    const reopened = createTokenVault(file);
+    await reopened.unlock(PASSWORD);
+    assert.equal(reopened.getMailSettings().host, "imap.gmail.com");
+    reopened.removeMailSettings();
+    assert.equal(reopened.getMailSettings(), null);
+    assert.equal(reopened.getToken("76561198000000001"), "token-a");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

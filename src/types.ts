@@ -1,4 +1,4 @@
-export type CooldownSource = "steam-page" | "manual";
+﻿export type CooldownSource = "steam-page" | "manual";
 
 
 export interface Cooldown {
@@ -61,7 +61,7 @@ export interface LoginStart {
   guards: string[];
 }
 
-// Mailbox (IMAP) settings used to read the Steam verification code. Not stored.
+// Mailbox (IMAP) settings used to read the Steam verification code. Stored encrypted only if the user chooses to save them.
 export interface MailSettings {
   host: string;
   port: number;
@@ -71,6 +71,20 @@ export interface MailSettings {
 
 // Generated for the signup; shown while it is open so the user can review and edit them.
 export type SignupMode = "browser" | "embedded";
+
+// Saved Steam login details for the Saved login section, filled in after a signup. The password is never stored on disk.
+export interface LoginDraft {
+  accountName: string;
+  password: string;
+}
+
+// Saved mailbox settings without the password, which stays in the vault.
+export interface SavedMail {
+  email: string;
+  host: string;
+  port: number;
+  user: string;
+}
 
 export interface SignupCredentials {
   username: string;
@@ -121,6 +135,11 @@ export interface SahApi {
   signupStatus(): Promise<SignupStatus>;
   signupComplete(input: { username: string; password: string }): Promise<LoginStart>;
   signupCancel(): Promise<{ ok: true }>;
+  getAppVersion(): Promise<string>;
+  getLoginDraft(id: string): Promise<LoginDraft | null>;
+  getMailSettings(): Promise<SavedMail | null>;
+  saveMailSettings(input: { email: string; mail: MailSettings }): Promise<{ ok: true }>;
+  clearMailSettings(): Promise<{ ok: true }>;
   getUpdateStatus(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<{ ok: true }>;

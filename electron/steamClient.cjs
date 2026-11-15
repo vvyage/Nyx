@@ -81,15 +81,25 @@ async function waitForSteamExit(timeoutMs) {
 // The account Steam is currently signed in as, or null when signed out or Steam is closed.
 // Steam stores the 32-bit account ID in HKCU\...\ActiveProcess\ActiveUser (0 when signed out).
 const STEAMID64_BASE = 76561197960265728n;
-async function activeSteamId64() {
-  if (!(await isSteamRunning())) return null;
-  const { ok, stdout } = await run("reg", ["query", `${REG_KEY}\\ActiveProcess`, "/v", "ActiveUser"]);
-  if (!ok) return null;
+
+// Parses `reg query ...\ActiveProcess` output. ActiveUser can keep the last account after Steam
+// shows its account picker, so a signed-in account also needs a running Steam process (pid).
+// Returns the SteamID64 or null.
+function parseActiveUser(stdout) {
+  const pid = stdout.match(/\bpid\s+REG_DWORD\s+0x([0-9a-fA-F]+)/);
+  if (!pid || BigInt(`0x${pid[1]}`) === 0n) return null;
   const match = stdout.match(/ActiveUser\s+REG_DWORD\s+0x([0-9a-fA-F]+)/);
   if (!match) return null;
   const accountId = BigInt(`0x${match[1]}`);
   if (accountId === 0n) return null;
   return (accountId + STEAMID64_BASE).toString();
+}
+
+async function activeSteamId64() {
+  if (!(await isSteamRunning())) return null;
+  const { ok, stdout } = await run("reg", ["query", `${REG_KEY}\\ActiveProcess`]);
+  if (!ok) return null;
+  return parseActiveUser(stdout);
 }
 
 // Makes the account Steam's auto-login user, then restarts Steam.
@@ -139,6 +149,7 @@ async function signInAccount(steamId64) {
 
 module.exports = {
   parseLoginUsers,
+  parseActiveUser,
   listRememberedAccounts,
   activeSteamId64,
   signInAccount,

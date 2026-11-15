@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import type { Account, DisplayStatus } from "./types";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Account, DisplayStatus, UpdateStatus } from "./types";
 import { formatDuration } from "./status";
 import logo from "./assets/logo.png";
 import { Starfield } from "./Starfield";
@@ -36,14 +36,25 @@ export function Frame({
   draggable = true,
   minimizable = true,
   closable = true,
+  showVersion = false,
 }: {
   children: ReactNode;
   title?: string;
   draggable?: boolean;
   minimizable?: boolean;
   closable?: boolean;
+  showVersion?: boolean;
 }) {
   const windowRef = useRef<HTMLDivElement>(null);
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showVersion) return;
+    window.sah
+      .getAppVersion()
+      .then(setVersion)
+      .catch(() => undefined);
+  }, [showVersion]);
 
   useEffect(() => {
     const el = windowRef.current;
@@ -67,6 +78,7 @@ export function Frame({
         <div className="titlebar-brand">
           <img className="titlebar-logo" src={logo} alt="" />
           <span>{title}</span>
+          {version && <span className="titlebar-version">v{version}</span>}
         </div>
         <div className="window-controls">
           {minimizable && (
@@ -97,6 +109,52 @@ export function Frame({
       </div>
     </div>
   );
+}
+
+// Update button for the toolbar and the unlock screen. Renders nothing unless an update is
+// found or downloaded. Available: download. Downloaded: restart and install.
+export function UpdateButton({ onError }: { onError?: (message: string) => void }) {
+  const [update, setUpdate] = useState<UpdateStatus>({ state: "idle", version: null, percent: 0 });
+
+  useEffect(() => {
+    window.sah.getUpdateStatus().then(setUpdate).catch(() => undefined);
+    return window.sah.onUpdateStatus(setUpdate);
+  }, []);
+
+  async function clicked() {
+    try {
+      if (update.state === "downloaded") {
+        await window.sah.installUpdate();
+        return;
+      }
+      await window.sah.downloadUpdate();
+    } catch (e) {
+      onError?.(errorText(e));
+    }
+  }
+
+  if (update.state === "available") {
+    return (
+      <button className="update-btn" onClick={clicked} title={`Download Nyx ${update.version}`}>
+        Update to {update.version}
+      </button>
+    );
+  }
+  if (update.state === "downloading") {
+    return (
+      <button className="update-btn" disabled title="Downloading the update">
+        Downloading {update.percent}%
+      </button>
+    );
+  }
+  if (update.state === "downloaded") {
+    return (
+      <button className="update-btn" onClick={clicked} title="Close Nyx and install the update">
+        Restart to update
+      </button>
+    );
+  }
+  return null;
 }
 
 export function isClear(status: DisplayStatus): boolean {

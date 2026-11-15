@@ -1,10 +1,10 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { Account, CooldownProgress, LoginStart, SignupCredentials, SignupMode, UpdateStatus, VaultStatus } from "./types";
-import { MAIL_PRESETS, presetForEmail } from "./mailPresets";
+import type { Account, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
+import { presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
 import { AccountWindow } from "./AccountPanel";
-import { Avatar, Badge, Count, Frame, Pill, errorText, isClear, signInBlock } from "./shared";
+import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, isClear, signInBlock } from "./shared";
 import { Icon } from "./Icon";
 
 // The same bundle serves the main window and the attached account panel (?panel=<id>).
@@ -28,11 +28,11 @@ function MainApp() {
     window.sah.vaultStatus().then(setVault).catch(() => setVault({ exists: true, unlocked: false }));
   }, []);
 
-  if (!vault) return <Frame><div className="gate" /></Frame>;
-  if (!vault.exists) return <Frame><VaultSetup onDone={setVault} /></Frame>;
-  if (!vault.unlocked) return <Frame><VaultUnlock onDone={setVault} /></Frame>;
+  if (!vault) return <Frame showVersion><div className="gate" /></Frame>;
+  if (!vault.exists) return <Frame showVersion><VaultSetup onDone={setVault} /></Frame>;
+  if (!vault.unlocked) return <Frame showVersion><VaultUnlock onDone={setVault} /></Frame>;
   return (
-    <Frame>
+    <Frame showVersion>
       <Dashboard
         onLock={async () => {
           setVault(await window.sah.vaultLock());
@@ -56,8 +56,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Update found by the main process (packaged builds only).
-  const [update, setUpdate] = useState<UpdateStatus>({ state: "idle", version: null, percent: 0 });
   // Add-account card: closed by default, with a SteamID tab and a sign-in tab.
   const [addOpen, setAddOpen] = useState(false);
   const [addTab, setAddTab] = useState<"id" | "login" | "create">("id");
@@ -70,11 +68,16 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   // Assisted signup form state. The mailbox password is cleared after the signup opens.
   const [signupEmail, setSignupEmail] = useState("");
   const [signupMode, setSignupMode] = useState<SignupMode>("embedded");
-  const [signupPreset, setSignupPreset] = useState("custom");
+  // The mail server fields appear only after the email field loses focus, and only for
+  // a valid address whose domain is not a known provider.
+  const [signupEmailDone, setSignupEmailDone] = useState(false);
   const [signupMailHost, setSignupMailHost] = useState("");
   const [signupMailPort, setSignupMailPort] = useState("993");
   const [signupMailUser, setSignupMailUser] = useState("");
   const [signupMailPassword, setSignupMailPassword] = useState("");
+  // Mailbox settings saved in the vault (without the password), and whether to save the next ones.
+  const [savedMail, setSavedMail] = useState<SavedMail | null>(null);
+  const [saveMailChoice, setSaveMailChoice] = useState(false);
   // The open signup. Username and password are editable, so they are kept apart from it.
   const [signup, setSignup] = useState<SignupCredentials | null>(null);
   const [signupUser, setSignupUser] = useState("");
@@ -91,9 +94,20 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   });
 
   useEffect(() => {
-    window.sah.getUpdateStatus().then(setUpdate).catch(() => {});
-    const offUpdate = window.sah.onUpdateStatus(setUpdate);
     window.sah.listAccounts().then(setAccounts).catch((e: Error) => setError(e.message));
+    // Fill the signup mailbox from the vault. The saved password is used when the field is blank.
+    window.sah
+      .getMailSettings()
+      .then((saved) => {
+        if (!saved) return;
+        setSavedMail(saved);
+        setSignupEmail(saved.email);
+        setSignupEmailDone(true);
+        setSignupMailHost(saved.host);
+        setSignupMailPort(String(saved.port));
+        setSignupMailUser(saved.user);
+      })
+      .catch(() => {});
     // Automatic reads push fresh accounts from the main process.
     const offAccounts = window.sah.onAccountsChanged(setAccounts);
     // Progress for both manual and automatic refreshes. Read the current state too, in
@@ -103,7 +117,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     // Closing the panel window clears the selection.
     const offPanelClosed = window.sah.onPanelClosed(() => setSelectedId(null));
     return () => {
-      offUpdate();
       offAccounts();
       offProgress();
       offPanelClosed();
@@ -163,20 +176,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
-  // Available: download. Downloaded: restart and install. Errors show in the banner.
-  async function updateClicked() {
-    try {
-      setError(null);
-      if (update.state === "downloaded") {
-        await window.sah.installUpdate();
-        return;
-      }
-      await window.sah.downloadUpdate();
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-
   async function refreshAll() {
     if (await run(() => window.sah.refreshAllCooldowns())) {
       setNotice("Cooldowns refreshed for accounts with a web session.");
@@ -220,9 +219,13 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   }
 
   async function addWithLogin() {
-    setBusy(true);
     setError(null);
     setNotice(null);
+    if (/^\d{17}$/.test(newLoginName.trim())) {
+      setError("Enter the Steam account name (login name), not the SteamID64.");
+      return;
+    }
+    setBusy(true);
     try {
       const start = await window.sah.loginStart({
         accountName: newLoginName.trim(),
@@ -270,23 +273,27 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     setSignupMessage(null);
   }
 
-  // Changing the email suggests a mail server when the domain is a known provider.
+  // Editing the email hides the mail server fields until the field loses focus again.
   function changeSignupEmail(value: string) {
     setSignupEmail(value);
-    const preset = presetForEmail(value.trim());
-    if (preset) {
-      setSignupPreset(preset.id);
-      setSignupMailHost(preset.host);
-      setSignupMailPort(String(preset.port));
-    }
+    setSignupEmailDone(false);
   }
 
-  function choosePreset(id: string) {
-    setSignupPreset(id);
-    const preset = MAIL_PRESETS.find((p) => p.id === id);
-    if (preset) {
-      setSignupMailHost(preset.host);
-      setSignupMailPort(String(preset.port));
+  // Mail server settings: a known provider is looked up from the email domain; any other
+  // valid address uses the server fields the user fills in.
+  const signupEmailValid = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(signupEmail.trim());
+  const signupKnownPreset = signupEmailDone && signupEmailValid ? presetForEmail(signupEmail.trim()) : null;
+  const signupShowCustomMail = signupEmailDone && signupEmailValid && !signupKnownPreset;
+  const signupHost = signupKnownPreset ? signupKnownPreset.host : signupMailHost.trim();
+  const signupPort = signupKnownPreset ? signupKnownPreset.port : Number(signupMailPort) || 993;
+
+  async function forgetMail() {
+    try {
+      await window.sah.clearMailSettings();
+      setSavedMail(null);
+      setNotice("Saved mailbox login removed.");
+    } catch (e) {
+      setError(errorText(e));
     }
   }
 
@@ -305,8 +312,8 @@ function Dashboard({ onLock }: { onLock: () => void }) {
         email: signupEmail.trim(),
         mode: signupMode,
         mail: {
-          host: signupMailHost.trim(),
-          port: Number(signupMailPort) || 993,
+          host: signupHost,
+          port: signupPort,
           user: signupMailUser.trim(),
           password: signupMailPassword,
         },
@@ -316,6 +323,15 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setSignupPass(creds.password);
       setSignupMessage("Opening Steam's signup page...");
       if (creds.mode === "browser") copyText(signupEmail.trim());
+      if (saveMailChoice && signupMailPassword) {
+        const mail = {
+          host: signupHost,
+          port: signupPort,
+          user: signupMailUser.trim(),
+        };
+        await window.sah.saveMailSettings({ email: signupEmail.trim(), mail: { ...mail, password: signupMailPassword } });
+        setSavedMail({ email: signupEmail.trim(), ...mail });
+      }
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -422,21 +438,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
           <Count icon="help" value={counts.unknown} label="unknown" tone="muted" />
         </div>
         <div className="actions">
-          {update.state === "available" && (
-            <button className="update-btn" onClick={updateClicked} title={`Download Nyx ${update.version}`}>
-              Update to {update.version}
-            </button>
-          )}
-          {update.state === "downloading" && (
-            <button className="update-btn" disabled title="Downloading the update">
-              Downloading {update.percent}%
-            </button>
-          )}
-          {update.state === "downloaded" && (
-            <button className="update-btn" onClick={updateClicked} title="Close Nyx and install the update">
-              Restart to update
-            </button>
-          )}
+          <UpdateButton onError={setError} />
           <button
             className={`icon-btn${refreshing ? " spin" : ""}`}
             title={refreshing ? checkingLabel : "Refresh cooldowns"}
@@ -605,35 +607,27 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     placeholder="Email for the new account"
                     value={signupEmail}
                     onChange={(e) => changeSignupEmail(e.target.value)}
+                    onBlur={() => setSignupEmailDone(true)}
                     autoComplete="off"
                   />
                 </div>
-                <div className="row">
-                  <select value={signupPreset} onChange={(e) => choosePreset(e.target.value)}>
-                    {MAIL_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.label}
-                      </option>
-                    ))}
-                    <option value="custom">Custom server</option>
-                  </select>
-                  <input
-                    placeholder="Mail server (IMAP), e.g. imap.gmail.com"
-                    value={signupMailHost}
-                    onChange={(e) => {
-                      setSignupMailHost(e.target.value);
-                      setSignupPreset("custom");
-                    }}
-                    autoComplete="off"
-                  />
-                  <input
-                    className="narrow"
-                    placeholder="Port"
-                    value={signupMailPort}
-                    onChange={(e) => setSignupMailPort(e.target.value)}
-                    autoComplete="off"
-                  />
-                </div>
+                {signupShowCustomMail && (
+                  <div className="row">
+                    <input
+                      placeholder="Mail server (IMAP), e.g. imap.example.com"
+                      value={signupMailHost}
+                      onChange={(e) => setSignupMailHost(e.target.value)}
+                      autoComplete="off"
+                    />
+                    <input
+                      className="narrow"
+                      placeholder="Port"
+                      value={signupMailPort}
+                      onChange={(e) => setSignupMailPort(e.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
                 <div className="row">
                   <input
                     placeholder="Mailbox login"
@@ -643,7 +637,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   />
                   <input
                     type="password"
-                    placeholder="Mailbox password (not stored)"
+                    placeholder={savedMail ? "Saved in vault (leave blank to use it)" : "Mailbox or app password"}
                     value={signupMailPassword}
                     onChange={(e) => setSignupMailPassword(e.target.value)}
                     autoComplete="new-password"
@@ -651,10 +645,10 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   <button
                     disabled={
                       busy ||
-                      !signupEmail.trim() ||
-                      !signupMailHost.trim() ||
+                      !signupEmailValid ||
+                      !signupHost ||
                       !signupMailUser.trim() ||
-                      !signupMailPassword
+                      (!signupMailPassword && !savedMail)
                     }
                     onClick={openSignup}
                   >
@@ -662,10 +656,28 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     Open signup
                   </button>
                 </div>
-                {(signupPreset === "gmail" || signupMailHost.trim().toLowerCase() === "imap.gmail.com") && (
+                {signupEmailDone && signupKnownPreset?.id === "gmail" && (
                   <p className="muted small">
                     Gmail requires an app password (16 characters, needs 2-Step Verification on the account), not your normal Google password.
                   </p>
+                )}
+                <div className="row">
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={saveMailChoice}
+                      onChange={(e) => setSaveMailChoice(e.target.checked)}
+                    />
+                    Save this mailbox login in the vault (encrypted)
+                  </label>
+                  {savedMail && (
+                    <button className="ghost small" onClick={forgetMail} disabled={busy}>
+                      Forget saved mailbox
+                    </button>
+                  )}
+                </div>
+                {savedMail && (
+                  <p className="muted small">Using the saved mailbox {savedMail.email}. The password comes from the vault.</p>
                 )}
               </>
             )
@@ -710,7 +722,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
             {addTab === "id"
               ? "Adds an account by its SteamID64 or profile link."
               : addTab === "create"
-                ? "Generates a username and password, opens Steam's signup page, and watches your mailbox for Steam's confirmation email, then opens its link. You fill the form, solve the CAPTCHA, and choose to create a new account. Edit the name and password if Steam changed them. The mailbox password is not stored."
+                ? "Generates a username and password, opens Steam's signup page, and watches your mailbox for Steam's confirmation email, then opens its link. You fill the form, solve the CAPTCHA, and choose to create a new account."
                 : "The password is not stored. Only a refresh token is kept in the encrypted vault."}
           </p>
         </section>

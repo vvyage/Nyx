@@ -6,6 +6,7 @@ const steamClient = require("./steamClient.cjs");
 const cooldownFetcher = require("./cooldownFetcher.cjs");
 const steamAuth = require("./steamAuth.cjs");
 const signupHelper = require("./signupHelper.cjs");
+const signupUtils = require("./signupUtils.cjs");
 const { createTokenVault } = require("./tokenVault.cjs");
 const { parseSteamIdInput, fetchProfileSummary } = require("./steamProfile.cjs");
 const { autoUpdater } = require("electron-updater");
@@ -458,6 +459,8 @@ function registerIpc() {
     signupHelper.cancel();
     closePanel();
     tokenVault().lock();
+    loginDrafts.clear();
+    pendingSignupLogin = null;
     return tokenVault().status();
   });
 
@@ -509,6 +512,14 @@ function registerIpc() {
       }
     }
     tokenVault().saveToken(result.steamId64, result.refreshToken);
+    // A manual save from the panel replaces the draft. A sign-in from the signup flow fills
+    // the new account's panel with the generated login.
+    if (accountId) {
+      loginDrafts.delete(accountId);
+    } else if (pendingSignupLogin && pendingSignupLogin.pendingId === input.pendingId) {
+      loginDrafts.set(targetId, pendingSignupLogin);
+      pendingSignupLogin = null;
+    }
     updateAccount(targetId, (item) => {
       item.tokenSaved = true;
     });
@@ -573,7 +584,40 @@ function registerIpc() {
   // Returns the generated username and password once, for the user to record.
   ipcMain.handle("signup:open", async (_event, input) => {
     if (!tokenVault().isUnlocked()) throw new Error("Unlock the vault before creating an account.");
-    return signupHelper.open(input);
+    // With no password typed, use the saved mailbox password, but only for the same mailbox.
+    const mail = { ...((input && input.mail) || {}) };
+    if (!mail.password) {
+      const saved = tokenVault().getMailSettings();
+      if (saved && saved.host === mail.host && saved.user === mail.user) mail.password = saved.password;
+    }
+    return signupHelper.open({ ...input, mail });
+  });
+
+  // Saved mailbox settings for the signup watcher. The password is never sent to the renderer.
+  ipcMain.handle("mail:get", async () => {
+    if (!tokenVault().isUnlocked()) return null;
+    const saved = tokenVault().getMailSettings();
+    return saved ? { email: saved.email, host: saved.host, port: saved.port, user: saved.user } : null;
+  });
+
+  ipcMain.handle("mail:save", async (_event, input) => {
+    if (!tokenVault().isUnlocked()) throw new Error("Unlock the vault before saving mail settings.");
+    const email = signupUtils.validEmail(input && input.email);
+    const mail = signupUtils.normalizeMailConfig(input && input.mail);
+    tokenVault().saveMailSettings({ email, ...mail });
+    return { ok: true };
+  });
+
+  ipcMain.handle("mail:clear", async () => {
+    if (tokenVault().isUnlocked()) tokenVault().removeMailSettings();
+    return { ok: true };
+  });
+
+  // Login details to fill into an account's Saved login section, or null.
+  ipcMain.handle("accounts:loginDraft", async (_event, id) => {
+    if (!tokenVault().isUnlocked()) return null;
+    const draft = loginDrafts.get(id);
+    return draft ? { accountName: draft.accountName, password: draft.password } : null;
   });
 
   ipcMain.handle("signup:status", async () => signupHelper.status());
@@ -583,7 +627,13 @@ function registerIpc() {
   // The username and password come from the signup card, where the user may have edited them.
   ipcMain.handle("signup:complete", async (_event, input) => {
     if (!tokenVault().isUnlocked()) throw new Error("Unlock the vault before saving a login.");
-    return signupHelper.complete(input);
+    const result = await signupHelper.complete(input);
+    pendingSignupLogin = {
+      pendingId: result.pendingId,
+      accountName: String(input.username).trim(),
+      password: String(input.password),
+    };
+    return result;
   });
 
   ipcMain.handle("signup:cancel", async () => {
@@ -591,6 +641,7 @@ function registerIpc() {
     return { ok: true };
   });
 
+  ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("update:status", async () => updater.getStatus());
   ipcMain.handle("update:download", async () => updater.download());
   ipcMain.handle("update:install", async () => {
@@ -606,6 +657,13 @@ const updater = createUpdater({
   send: sendToWindows,
   log: console,
 });
+
+// Login details for each account's next Saved login, filled into its panel after a signup.
+// Held in memory only: cleared on vault lock and never written to disk.
+const loginDrafts = new Map();
+// Credentials from the last completed signup, kept until its sign-in finishes (matched by
+// pendingId), so the new account's panel can be filled in.
+let pendingSignupLogin = null;
 
 const indexPath = path.join(__dirname, "..", "dist", "renderer", "index.html");
 const MAIN_WIDTH = 1100;
