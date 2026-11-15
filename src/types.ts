@@ -89,6 +89,14 @@ export type DisplayStatus =
   | { kind: "expired"; until: Date }
   | { kind: "clear"; detail: string };
 
+// idle: nothing to show. available: a newer release exists. downloading: fetching it.
+// downloaded: ready to install on restart.
+export interface UpdateStatus {
+  state: "idle" | "available" | "downloading" | "downloaded";
+  version: string | null;
+  percent: number;
+}
+
 export interface SahApi {
   listAccounts(): Promise<Account[]>;
   addAccount(input: { steamId64: string }): Promise<Account[]>;
@@ -113,6 +121,10 @@ export interface SahApi {
   signupStatus(): Promise<SignupStatus>;
   signupComplete(input: { username: string; password: string }): Promise<LoginStart>;
   signupCancel(): Promise<{ ok: true }>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  downloadUpdate(): Promise<UpdateStatus>;
+  installUpdate(): Promise<{ ok: true }>;
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onAccountsChanged(callback: (accounts: Account[]) => void): () => void;
   getCooldownProgress(): Promise<CooldownProgress>;
   onCooldownProgress(callback: (progress: CooldownProgress) => void): () => void;

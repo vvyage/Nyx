@@ -38,6 +38,7 @@
       "icon": "src/assets/logo.png"
     },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
@@ -45,6 +46,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "imapflow": "^2.11.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

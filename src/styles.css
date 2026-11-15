@@ -287,6 +287,24 @@ textarea {
   background: transparent;
   border-color: transparent;
 }
+/* Shown in the toolbar only when an update is found or downloaded. */
+.update-btn {
+  height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.update-btn:disabled {
+  opacity: 0.7;
+}
 
 /* Banners */
 .banner {

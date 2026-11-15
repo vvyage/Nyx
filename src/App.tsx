@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { Account, CooldownProgress, LoginStart, SignupCredentials, SignupMode, VaultStatus } from "./types";
+import type { Account, CooldownProgress, LoginStart, SignupCredentials, SignupMode, UpdateStatus, VaultStatus } from "./types";
 import { MAIL_PRESETS, presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
@@ -56,6 +56,8 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Update found by the main process (packaged builds only).
+  const [update, setUpdate] = useState<UpdateStatus>({ state: "idle", version: null, percent: 0 });
   // Add-account card: closed by default, with a SteamID tab and a sign-in tab.
   const [addOpen, setAddOpen] = useState(false);
   const [addTab, setAddTab] = useState<"id" | "login" | "create">("id");
@@ -89,6 +91,8 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   });
 
   useEffect(() => {
+    window.sah.getUpdateStatus().then(setUpdate).catch(() => {});
+    const offUpdate = window.sah.onUpdateStatus(setUpdate);
     window.sah.listAccounts().then(setAccounts).catch((e: Error) => setError(e.message));
     // Automatic reads push fresh accounts from the main process.
     const offAccounts = window.sah.onAccountsChanged(setAccounts);
@@ -99,6 +103,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     // Closing the panel window clears the selection.
     const offPanelClosed = window.sah.onPanelClosed(() => setSelectedId(null));
     return () => {
+      offUpdate();
       offAccounts();
       offProgress();
       offPanelClosed();
@@ -155,6 +160,20 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   async function syncFromSteam() {
     if (await run(() => window.sah.importRemembered())) {
       setNotice("Synced accounts from Steam.");
+    }
+  }
+
+  // Available: download. Downloaded: restart and install. Errors show in the banner.
+  async function updateClicked() {
+    try {
+      setError(null);
+      if (update.state === "downloaded") {
+        await window.sah.installUpdate();
+        return;
+      }
+      await window.sah.downloadUpdate();
+    } catch (e) {
+      setError(errorText(e));
     }
   }
 
@@ -403,6 +422,21 @@ function Dashboard({ onLock }: { onLock: () => void }) {
           <Count icon="help" value={counts.unknown} label="unknown" tone="muted" />
         </div>
         <div className="actions">
+          {update.state === "available" && (
+            <button className="update-btn" onClick={updateClicked} title={`Download Nyx ${update.version}`}>
+              Update to {update.version}
+            </button>
+          )}
+          {update.state === "downloading" && (
+            <button className="update-btn" disabled title="Downloading the update">
+              Downloading {update.percent}%
+            </button>
+          )}
+          {update.state === "downloaded" && (
+            <button className="update-btn" onClick={updateClicked} title="Close Nyx and install the update">
+              Restart to update
+            </button>
+          )}
           <button
             className={`icon-btn${refreshing ? " spin" : ""}`}
             title={refreshing ? checkingLabel : "Refresh cooldowns"}

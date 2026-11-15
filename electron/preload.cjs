@@ -24,6 +24,15 @@ contextBridge.exposeInMainWorld("sah", {
   signupStatus: () => ipcRenderer.invoke("signup:status"),
   signupComplete: (input) => ipcRenderer.invoke("signup:complete", input),
   signupCancel: () => ipcRenderer.invoke("signup:cancel"),
+  getUpdateStatus: () => ipcRenderer.invoke("update:status"),
+  downloadUpdate: () => ipcRenderer.invoke("update:download"),
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  // Fired as the update check and download change. Returns an unsubscribe function.
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("update:status", listener);
+    return () => ipcRenderer.removeListener("update:status", listener);
+  },
   getCooldownProgress: () => ipcRenderer.invoke("cooldowns:progressState"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),

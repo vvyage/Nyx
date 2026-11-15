@@ -8,6 +8,8 @@ const steamAuth = require("./steamAuth.cjs");
 const signupHelper = require("./signupHelper.cjs");
 const { createTokenVault } = require("./tokenVault.cjs");
 const { parseSteamIdInput, fetchProfileSummary } = require("./steamProfile.cjs");
+const { autoUpdater } = require("electron-updater");
+const { createUpdater } = require("./updater.cjs");
 
 // Keep the data folder the same in dev and packaged builds. Packaged builds would
 // otherwise use productName ("Nyx") and miss existing accounts and vault.
@@ -588,7 +590,22 @@ function registerIpc() {
     signupHelper.cancel();
     return { ok: true };
   });
+
+  ipcMain.handle("update:status", async () => updater.getStatus());
+  ipcMain.handle("update:download", async () => updater.download());
+  ipcMain.handle("update:install", async () => {
+    updater.install();
+    return { ok: true };
+  });
 }
+
+// Checks GitHub Releases for a newer build (packaged builds only). See updater.cjs.
+const updater = createUpdater({
+  autoUpdater,
+  isPackaged: app.isPackaged,
+  send: sendToWindows,
+  log: console,
+});
 
 const indexPath = path.join(__dirname, "..", "dist", "renderer", "index.html");
 const MAIN_WIDTH = 1100;
@@ -781,6 +798,7 @@ app.whenReady().then(() => {
     }
   }, ACTIVE_POLL_MS);
   setInterval(() => refreshCooldowns().catch(() => {}), AUTO_REFRESH_MS);
+  updater.start();
 });
 
 app.on("window-all-closed", () => {
