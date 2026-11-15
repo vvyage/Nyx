@@ -153,4 +153,5 @@ module.exports = {
   listRememberedAccounts,
   activeSteamId64,
   signInAccount,
+  steamDir,
 };

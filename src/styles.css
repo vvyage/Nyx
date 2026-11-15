@@ -927,3 +927,56 @@ p {
   margin: 0;
   font-size: 13px;
 }
+
+/* CS2 settings section (AccountPanel.tsx) */
+.cs2-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 165, 36, 0.4);
+  background: rgba(245, 165, 36, 0.08);
+  font-size: 12px;
+}
+.cs2-error {
+  margin: 0;
+  color: #f87171;
+}
+.cs2-backups,
+.cs2-binds {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cs2-backups li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.small-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.cs2-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs2-binds {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cs2-binds li {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}

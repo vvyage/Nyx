@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { Account, LoginStart } from "./types";
+import type { Account, Cs2Binding, Cs2State, LoginStart } from "./types";
 import { displayStatus, localInputToIso } from "./status";
 import { Avatar, DetailStatus, errorText, guardNotice, signInBlock } from "./shared";
 import { Icon, type IconName } from "./Icon";
@@ -50,6 +50,130 @@ function Section({ icon, title, children }: { icon: IconName; title: string; chi
       </div>
       {children}
     </section>
+  );
+}
+
+// CS2 settings for this account: one import from Steam (confirmed), kept as timestamped backups.
+function Cs2Section({ accountId }: { accountId: string }) {
+  const [state, setState] = useState<Cs2State | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [showBackups, setShowBackups] = useState(false);
+  const [viewing, setViewing] = useState<{ id: string; bindings: Cs2Binding[] } | null>(null);
+
+  useEffect(() => {
+    window.sah
+      .cs2List(accountId)
+      .then(setState)
+      .catch((e) => setError(errorText(e)));
+  }, [accountId]);
+
+  async function importNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await window.sah.cs2Import(accountId));
+      setViewing(null);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setConfirming(false);
+      setBusy(false);
+    }
+  }
+
+  async function view(id: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      setViewing({ id, bindings: await window.sah.cs2View(accountId, id) });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const latest = state?.snapshots[0] ?? null;
+  const backups = state?.snapshots ?? [];
+
+  return (
+    <Section icon="key" title="CS2 settings">
+      <p className="muted small">
+        {latest
+          ? `Last imported ${new Date(latest.createdAt).toLocaleString()}${
+              latest.bindingCount !== null ? `, ${latest.bindingCount} keybinds` : ""
+            }.`
+          : "Not imported yet."}
+        {state && !state.available && " No CS2 settings for this account on this PC right now."}
+      </p>
+
+      {error && <p className="cs2-error small">{error}</p>}
+
+      {confirming ? (
+        <div className="cs2-confirm">
+          <span>
+            Replace the Nyx copy with the current CS2 settings from Steam? The current copy is kept in Backups.
+          </span>
+          <div className="row">
+            <button onClick={importNow} disabled={busy}>
+              <Icon name="check" />
+              Import
+            </button>
+            <button className="ghost" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="row">
+          <button onClick={() => setConfirming(true)} disabled={busy || !state?.available}>
+            <Icon name="download" />
+            Import from Steam
+          </button>
+          <button className="ghost" onClick={() => setShowBackups((v) => !v)} disabled={backups.length === 0}>
+            Backups ({backups.length})
+          </button>
+        </div>
+      )}
+
+      {showBackups && backups.length > 0 && (
+        <ul className="cs2-backups">
+          {backups.map((snapshot) => (
+            <li key={snapshot.id}>
+              <span className="small">
+                {new Date(snapshot.createdAt).toLocaleString()}
+                {snapshot.bindingCount !== null ? ` · ${snapshot.bindingCount} keybinds` : " · keybinds unreadable"}
+              </span>
+              <button className="ghost small-btn" disabled={busy} onClick={() => view(snapshot.id)}>
+                View
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {viewing && (
+        <div className="cs2-view">
+          <div className="row">
+            <span className="small">{viewing.bindings.length} keybinds</span>
+            <button className="ghost small-btn" onClick={() => setViewing(null)}>
+              <Icon name="x" size={12} />
+              Close
+            </button>
+          </div>
+          <ul className="cs2-binds">
+            {viewing.bindings.map((bind, index) => (
+              <li key={`${bind.key}-${index}`}>
+                <span>{bind.key}</span>
+                <span>{bind.command}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -307,6 +431,8 @@ function AccountPanel({
           </button>
         </div>
       </Section>
+
+      <Cs2Section accountId={account.id} />
 
       <Section icon="calendar" title="Manual end">
         <div className="row">

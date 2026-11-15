@@ -115,6 +115,27 @@ export interface UpdateStatus {
   percent: number;
 }
 
+// One CS2 settings backup. bindingCount is null when the keys file could not be read (see bindingNote).
+export interface Cs2Snapshot {
+  id: string;
+  createdAt: string;
+  bindingCount: number | null;
+  bindingNote: string | null;
+  files: { name: string; size: number; sha256: string }[];
+}
+
+export interface Cs2State {
+  // True when Steam has CS2 settings for this account on this PC.
+  available: boolean;
+  // Newest first.
+  snapshots: Cs2Snapshot[];
+}
+
+export interface Cs2Binding {
+  key: string;
+  command: string;
+}
+
 export interface SahApi {
   listAccounts(): Promise<Account[]>;
   addAccount(input: { steamId64: string }): Promise<Account[]>;
@@ -141,6 +162,9 @@ export interface SahApi {
   signupCancel(): Promise<{ ok: true }>;
   getAppVersion(): Promise<string>;
   getLoginDraft(id: string): Promise<LoginDraft | null>;
+  cs2List(id: string): Promise<Cs2State>;
+  cs2Import(id: string): Promise<Cs2State>;
+  cs2View(id: string, snapshotId: string): Promise<Cs2Binding[]>;
   getMailSettings(): Promise<SavedMail | null>;
   saveMailSettings(input: { email: string; mail: MailSettings }): Promise<{ ok: true }>;
   clearMailSettings(): Promise<{ ok: true }>;

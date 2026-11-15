@@ -7,6 +7,7 @@ const cooldownFetcher = require("./cooldownFetcher.cjs");
 const steamAuth = require("./steamAuth.cjs");
 const signupHelper = require("./signupHelper.cjs");
 const signupUtils = require("./signupUtils.cjs");
+const cs2Config = require("./cs2Config.cjs");
 const { createTokenVault } = require("./tokenVault.cjs");
 const { parseSteamIdInput, fetchProfileSummary } = require("./steamProfile.cjs");
 const { autoUpdater } = require("electron-updater");
@@ -32,6 +33,14 @@ const ACTIVE_POLL_MS = 10 * 1000;
 
 // Only parsed results are stored: no HTML, passwords, cookies, or tokens.
 const storePath = () => path.join(app.getPath("userData"), "accounts.json");
+const cs2StorePath = () => path.join(app.getPath("userData"), "cs2-configs");
+
+// Whether Steam has CS2 settings for the account on this PC, plus the stored backups.
+async function cs2Summary(account) {
+  const steamRoot = await steamClient.steamDir().catch(() => null);
+  const available = Boolean(steamRoot) && fs.existsSync(cs2Config.sourceDirFor(steamRoot, account.steamId64));
+  return { available, snapshots: cs2Config.listSnapshots(cs2StorePath(), account.steamId64) };
+}
 
 function loadAccounts() {
   try {
@@ -430,9 +439,28 @@ function registerIpc() {
       }
       tokenVault().removeToken(removed.steamId64);
     }
+    if (removed) cs2Config.removeStore(cs2StorePath(), removed.steamId64);
     const remaining = accounts.filter((item) => item.id !== id);
     saveAccounts(remaining);
     return respond(remaining);
+  });
+
+  // CS2 settings backups. Import copies from Steam's userdata folder into Nyx's own store.
+  ipcMain.handle("cs2:list", async (_event, id) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    return cs2Summary(account);
+  });
+
+  ipcMain.handle("cs2:import", async (_event, id) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    const steamRoot = await steamClient.steamDir().catch(() => null);
+    cs2Config.createSnapshot({ steamRoot, storeRoot: cs2StorePath(), steamId64: account.steamId64 });
+    return cs2Summary(account);
+  });
+
+  ipcMain.handle("cs2:view", (_event, id, snapshotId) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    return cs2Config.readBindings(cs2StorePath(), account.steamId64, requireString(snapshotId, "Backup", 40));
   });
 
   ipcMain.handle("vault:status", async () => tokenVault().status());
