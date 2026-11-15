@@ -22,15 +22,16 @@ export function displayStatus(account: Account, now: Date): DisplayStatus {
     : { kind: "expired", until };
 }
 
-// Live countdown in one fixed shape, HH:MM:SS. Hours are not split into days and every
-// field is always two digits, so the text does not change length as it ticks.
-// Example: "11:12:09". Only past 99 hours does the hour field grow by a digit.
+// Live countdown. Under a day it is HH:MM:SS, with every field two digits, e.g. "11:12:09".
+// From a day up, the whole days come first: "6d 22:03:01" (166 hours).
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  const clock = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  return days > 0 ? `${days}d ${clock}` : clock;
 }
 
 function pad(value: number): string {

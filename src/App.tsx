@@ -4,7 +4,7 @@ import { presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
 import { AccountWindow } from "./AccountPanel";
-import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, isClear, signInBlock } from "./shared";
+import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock } from "./shared";
 import { Icon } from "./Icon";
 
 // The same bundle serves the main window and the attached account panel (?panel=<id>).
@@ -232,13 +232,13 @@ function Dashboard({ onLock }: { onLock: () => void }) {
         password: newLoginPassword,
       });
       setNewLoginPassword("");
+      if (start.codeFromMail) {
+        await finishAddWithLogin(start.pendingId);
+        return;
+      }
       if (start.guards.some((g) => g === "DeviceCode" || g === "EmailCode")) {
         setNewLoginGuard(start);
-        setNotice(
-          start.guards.includes("EmailCode")
-            ? "Enter the Steam Guard code from the email Steam sent."
-            : "Enter the code from your Steam mobile app.",
-        );
+        setNotice(guardNotice(start));
         return;
       }
       if (start.guards.length > 0) setNotice("Approve the sign-in in your Steam mobile app.");
@@ -388,13 +388,13 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     try {
       const start = await window.sah.signupComplete({ username: signupUser.trim(), password: signupPass });
       clearSignupView();
+      if (start.codeFromMail) {
+        await finishAddWithLogin(start.pendingId);
+        return;
+      }
       if (start.guards.some((g) => g === "DeviceCode" || g === "EmailCode")) {
         setNewLoginGuard(start);
-        setNotice(
-          start.guards.includes("EmailCode")
-            ? "Enter the Steam Guard code from the email Steam sent."
-            : "Enter the code from your Steam mobile app.",
-        );
+        setNotice(guardNotice(start));
         return;
       }
       if (start.guards.length > 0) setNotice("Approve the sign-in in your Steam mobile app.");

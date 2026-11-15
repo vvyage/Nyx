@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Account, LoginStart } from "./types";
 import { displayStatus, localInputToIso } from "./status";
-import { Avatar, DetailStatus, errorText, signInBlock } from "./shared";
+import { Avatar, DetailStatus, errorText, guardNotice, signInBlock } from "./shared";
 import { Icon, type IconName } from "./Icon";
 
 // Root of the attached account panel window. Follows the account the main window selects.
@@ -155,13 +155,13 @@ function AccountPanel({
         password: loginPassword,
       });
       setLoginPassword("");
+      if (start.codeFromMail) {
+        await finishSavedLogin(start.pendingId);
+        return;
+      }
       if (start.guards.some((g) => g === "DeviceCode" || g === "EmailCode")) {
         setLoginGuard(start);
-        setNotice(
-          start.guards.includes("EmailCode")
-            ? "Enter the Steam Guard code from the email Steam sent."
-            : "Enter the code from your Steam mobile app.",
-        );
+        setNotice(guardNotice(start));
         return;
       }
       // No code needed, or only approval in the Steam app is required.

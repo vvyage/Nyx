@@ -75,6 +75,36 @@ function decodeQuotedPrintable(text) {
     .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+// Reads the 5-character Steam Guard code from a sign-in email. HTML tags become line breaks
+// first, so a code in its own table cell is found too.
+function extractSteamGuardCode(raw) {
+  const lines = String(raw)
+    .replace(/<[^>]+>/g, "\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const direct = extractVerificationCode(lines.join("\n"));
+  if (direct) return direct;
+  // A code alone on the line after a "code" line, as in an HTML cell.
+  for (let i = 0; i < lines.length - 1; i++) {
+    const next = lines[i + 1];
+    if (/[Cc]ode|[Vv]erification/.test(lines[i]) && /^[A-Z0-9]{5}$/.test(next) && /\d/.test(next)) return next;
+  }
+  return null;
+}
+
+// Decodes the body of a raw message as text the code and link finders can search: the
+// quoted-printable text, plus any base64 lines decoded in place (base64 mail bodies are
+// written as lines of 76 characters).
+function mailText(source) {
+  const text = decodeQuotedPrintable(source);
+  const decoded = [];
+  for (const line of text.match(/^[A-Za-z0-9+/]{40,}={0,2}$/gm) || []) {
+    decoded.push(Buffer.from(line, "base64").toString("utf8"));
+  }
+  return decoded.length ? `${text}\n${decoded.join("\n")}` : text;
+}
+
 // IMAP settings for common providers. The renderer keeps a matching list (mailPresets.ts).
 const MAIL_PRESETS = [
   { id: "gmail", label: "Gmail", host: "imap.gmail.com", port: 993, spam: "[Gmail]/Spam", domains: ["gmail.com", "googlemail.com"] },
@@ -136,7 +166,9 @@ module.exports = {
   validEmail,
   normalizeMailConfig,
   extractVerificationCode,
+  extractSteamGuardCode,
   decodeQuotedPrintable,
+  mailText,
   MAIL_PRESETS,
   presetForEmail,
   spamFolderFor,

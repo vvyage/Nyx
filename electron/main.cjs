@@ -471,7 +471,11 @@ function registerIpc() {
     if (input && input.accountId) requireAccount(loadAccounts(), requireString(input.accountId, "Account"));
     const accountName = requireString(input && input.accountName, "Steam account name", 100);
     const password = requireString(input && input.password, "Password", 200);
-    return steamAuth.startLogin(accountName, password);
+    const since = Date.now() - signupHelper.STEAM_CODE_LOOKBACK_MS;
+    const start = await steamAuth.startLogin(accountName, password);
+    // When Steam emails a code and a mailbox is saved, the code is read from it here.
+    const fromMail = await signupHelper.submitEmailCodeIfNeeded(start, tokenVault().getMailSettings(), since);
+    return { ...start, ...fromMail };
   });
 
   ipcMain.handle("login:code", async (_event, input) => {

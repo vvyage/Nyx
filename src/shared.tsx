@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Account, DisplayStatus, UpdateStatus } from "./types";
+import type { Account, DisplayStatus, LoginStart, UpdateStatus } from "./types";
 import { formatDuration } from "./status";
 import logo from "./assets/logo.png";
 import { Starfield } from "./Starfield";
@@ -222,6 +222,13 @@ export function Badge({
       {label}
     </span>
   );
+}
+
+// Message shown while a sign-in waits for a Steam Guard code the user must type.
+export function guardNotice(start: LoginStart): string {
+  if (!start.guards.includes("EmailCode")) return "Enter the code from your Steam mobile app.";
+  const ask = "Enter the Steam Guard code from the email Steam sent.";
+  return start.mailNote ? `${start.mailNote} ${ask}` : ask;
 }
 
 export function Pill({ status, now }: { status: DisplayStatus; now: Date }) {

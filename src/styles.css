@@ -677,6 +677,7 @@ textarea {
 
 /* Account panel (attached window) */
 .panel {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -686,6 +687,16 @@ textarea {
   padding: 16px;
   border-left: 1px solid var(--line);
   background: rgba(11, 13, 19, 0.6);
+}
+/* Notices float over the top of the panel. In the flow they pushed the sections down and
+   added a scrollbar to the panel. */
+.panel > .banner {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 10;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
 }
 .panel-hero {
   display: flex;

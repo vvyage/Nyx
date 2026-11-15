@@ -59,6 +59,10 @@ export interface LoginStart {
   // Steam Guard methods Steam needs, e.g. "DeviceCode", "EmailCode",
   // "DeviceConfirmation", "EmailConfirmation". Empty when no code is needed.
   guards: string[];
+  // True when the Steam Guard email code was read from the saved mailbox and submitted already.
+  codeFromMail?: boolean;
+  // Why the code was not read from the mailbox, when it was needed and the user must type it.
+  mailNote?: string | null;
 }
 
 // Mailbox (IMAP) settings used to read the Steam verification code. Stored encrypted only if the user chooses to save them.

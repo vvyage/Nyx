@@ -13,7 +13,7 @@
 // the user confirms (which may be edited) are used for the sign-in.
 
 const crypto = require("node:crypto");
-const { BrowserWindow, app, shell, session: electronSession } = require("electron");
+const { BrowserWindow, app, clipboard, shell, session: electronSession } = require("electron");
 const { ImapFlow } = require("imapflow");
 const steamAuth = require("./steamAuth.cjs");
 const utils = require("./signupUtils.cjs");
@@ -25,6 +25,11 @@ const MAIL_WAIT_MS = 10 * 60 * 1000;
 // Mail sent just before the signup opened still counts.
 const MAIL_LOOKBACK_MS = 60 * 1000;
 const SIGNUP_TIMEOUT_MS = 30 * 60 * 1000;
+// Steam Guard email codes: how long to wait for the email, and how often to check the mailbox.
+const STEAM_CODE_WAIT_MS = 90 * 1000;
+const STEAM_CODE_POLL_MS = 5000;
+// Sign-ins may send mail a little before the sign-in call returns.
+const STEAM_CODE_LOOKBACK_MS = 5 * 1000;
 
 // Selectors for Steam's join page, used only in embedded mode. Not verified against the
 // live site: if Steam changes a field, update it here.
@@ -181,14 +186,27 @@ async function fillForm(session) {
       wc.focus();
       const focused = await wc.executeJavaScript(focusScript(key), true);
       if (!focused) continue;
-      await wc.insertText(wanted[key]);
-      await sleep(150);
+      await pasteValue(wc, wanted[key]);
       await wc.executeJavaScript(blurScript(key), true);
     }
   } catch {
     // The page may be navigating; the next tick tries again.
   } finally {
     session.checking = false;
+  }
+}
+
+// Pastes the value into the focused field, the same way a manual Ctrl+V does. Steam's form
+// rejects the password when it is typed with insertText, but accepts it when pasted. The
+// clipboard's previous text is put back afterwards.
+async function pasteValue(wc, value) {
+  const previous = clipboard.readText();
+  clipboard.writeText(value);
+  try {
+    wc.paste();
+    await sleep(250);
+  } finally {
+    clipboard.writeText(previous);
   }
 }
 
@@ -268,8 +286,8 @@ function openLinkWindow(link) {
   });
 }
 
-// Searches INBOX and the spam folder for the newest Steam email with a confirmation link.
-async function findConfirmationLink(mail, since) {
+// Connects to the mailbox, runs work(client), and logs out.
+async function withMailbox(mail, work) {
   const client = new ImapFlow({
     host: mail.host,
     port: mail.port,
@@ -279,31 +297,80 @@ async function findConfirmationLink(mail, since) {
   });
   await client.connect();
   try {
-    for (const folder of ["INBOX", utils.spamFolderFor(mail.host)]) {
-      const link = await findLinkInFolder(client, folder, since).catch(() => null);
-      if (link) return link;
-    }
-    return null;
+    return await work(client);
   } finally {
     await client.logout().catch(() => client.close());
   }
 }
 
-async function findLinkInFolder(client, folder, since) {
+// Searches INBOX and the spam folder for the newest Steam email that `pick` finds a value in.
+// Returns that value, or null.
+async function newestAcrossFolders(client, mail, since, pick) {
+  let best = null;
+  for (const folder of ["INBOX", utils.spamFolderFor(mail.host)]) {
+    const found = await newestMatchInFolder(client, folder, since, pick).catch(() => null);
+    if (found && (!best || found.date > best.date)) best = found;
+  }
+  return best ? best.value : null;
+}
+
+// The newest message in one folder, from Steam and received since `since`, for which pick()
+// returns a value. Returns { date, value } or null.
+async function newestMatchInFolder(client, folder, since, pick) {
   const lock = await client.getMailboxLock(folder);
   try {
     const uids = (await client.search({ from: "steampowered.com", since: new Date(since) }, { uid: true })) || [];
     for (const uid of uids.slice(-5).reverse()) {
       const message = await client.fetchOne(uid, { source: true, internalDate: true }, { uid: true });
       if (!message || !message.source) continue;
-      if (message.internalDate && new Date(message.internalDate).getTime() < since) continue;
-      const link = utils.extractConfirmationLink(utils.decodeQuotedPrintable(message.source.toString("utf8")));
-      if (link) return link;
+      const date = message.internalDate ? new Date(message.internalDate).getTime() : 0;
+      if (date < since) continue;
+      const value = pick(utils.mailText(message.source.toString("utf8")));
+      if (value) return { date, value };
     }
     return null;
   } finally {
     lock.release();
   }
+}
+
+// The confirmation link in the newest Steam email, or null.
+async function findConfirmationLink(mail, since) {
+  return withMailbox(mail, (client) => newestAcrossFolders(client, mail, since, utils.extractConfirmationLink));
+}
+
+// Waits for Steam's Steam Guard email and submits its code to a pending sign-in. Resolves with
+// { submitted: true } or { submitted: false, note } where note says why the user must type the
+// code. Only emails received since `since` are used, so an older code is never submitted.
+async function submitEmailCode(pendingId, mail, since) {
+  const deadline = Date.now() + STEAM_CODE_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(STEAM_CODE_POLL_MS);
+    let code;
+    try {
+      code = await withMailbox(mail, (client) =>
+        newestAcrossFolders(client, mail, since, utils.extractSteamGuardCode),
+      );
+    } catch (error) {
+      return { submitted: false, note: `Could not read the mailbox: ${mailErrorText(error)}.` };
+    }
+    if (!code) continue;
+    try {
+      await steamAuth.submitCode(pendingId, code);
+      return { submitted: true };
+    } catch (error) {
+      return { submitted: false, note: `The code from the email was not accepted: ${error.message}` };
+    }
+  }
+  return { submitted: false, note: "No Steam Guard email reached the mailbox in time." };
+}
+
+// Fills in the Steam Guard email code when Steam asks for one and a mailbox is available.
+// Returns { codeFromMail, mailNote } for the renderer. Without a mailbox, nothing happens.
+async function submitEmailCodeIfNeeded(start, mail, since) {
+  if (!mail || !start.guards.includes("EmailCode")) return { codeFromMail: false, mailNote: null };
+  const outcome = await submitEmailCode(start.pendingId, mail, since);
+  return { codeFromMail: outcome.submitted, mailNote: outcome.submitted ? null : outcome.note };
 }
 
 function status() {
@@ -312,12 +379,13 @@ function status() {
 }
 
 // Called after the user has created the account on Steam's page. Starts the sign-in with the
-// credentials the user confirmed (edited values included); the caller then collects the Steam
-// Guard code as usual.
+// credentials the user confirmed (edited values included). When Steam asks for an email code,
+// the signup's mailbox is read for it. Otherwise the caller collects the code as usual.
 async function complete(input) {
   if (!active) throw new Error("No signup is open.");
   const session = active;
   const { username, password } = utils.validSignupCredentials(input);
+  const since = Date.now() - STEAM_CODE_LOOKBACK_MS;
   let result;
   try {
     result = await steamAuth.startLogin(username, password);
@@ -326,8 +394,10 @@ async function complete(input) {
       `${error.message} If the account is not finished yet, finish the signup on Steam's page and try again.`,
     );
   }
+  const mail = session.mail;
   if (active === session) reset();
-  return result;
+  const fromMail = await submitEmailCodeIfNeeded(result, mail, since);
+  return { ...result, ...fromMail };
 }
 
 function cancel() {
@@ -348,4 +418,4 @@ function reset() {
   session.win = null;
 }
 
-module.exports = { open, status, complete, cancel, FIELDS };
+module.exports = { open, status, complete, cancel, submitEmailCodeIfNeeded, STEAM_CODE_LOOKBACK_MS, FIELDS };

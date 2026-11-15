@@ -20,6 +20,18 @@ test("generated passwords have all four character classes and the right length",
   }
 });
 
+test("extractSteamGuardCode finds the code in plain text and in an HTML cell", () => {
+  assert.equal(utils.extractSteamGuardCode("Your Steam Guard code is: K7HB4\n"), "K7HB4");
+  assert.equal(utils.extractSteamGuardCode("<td>Steam Guard code</td><td>K7HB4</td>"), "K7HB4");
+  assert.equal(utils.extractSteamGuardCode("Hello, nothing to see here"), null);
+});
+
+test("mailText decodes base64 body lines next to the raw text", () => {
+  const encoded = Buffer.from("Your Steam Guard code is: Q9WRT").toString("base64");
+  const text = utils.mailText(`Subject: x\n\n${encoded}\n`);
+  assert.equal(utils.extractSteamGuardCode(text), "Q9WRT");
+});
+
 test("generated passwords differ between calls", () => {
   assert.notEqual(utils.generatePassword(), utils.generatePassword());
 });
