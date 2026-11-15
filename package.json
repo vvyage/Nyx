@@ -1,0 +1,62 @@
+{
+  "name": "nyx",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows-local tracker for CS2 matchmaking cooldowns",
+  "author": "Nyx",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test electron/*.test.js",
+    "dist": "npm run build && npm test && electron-builder --win --publish never"
+  },
+  "build": {
+    "appId": "local.steamaccounthelper",
+    "productName": "Nyx",
+    "directories": {
+      "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "vvyage",
+      "repo": "Nyx"
+    },
+    "files": [
+      "electron/**/*",
+      "!electron/**/*.test.js",
+      "dist/renderer/**/*",
+      "src/assets/logo.png",
+      "package.json"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "src/assets/logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "imapflow": "^2.11.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "steam-session": "^1.9.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "typescript": "^5.6.3",
+    "vite": "^8.3.8"
+  }
+}

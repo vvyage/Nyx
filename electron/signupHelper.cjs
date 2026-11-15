@@ -1,0 +1,338 @@
+// Assisted Steam signup. The app generates a username and password, opens Steam's join page,
+// and watches the user's mailbox (INBOX and spam) for Steam's confirmation email. When the
+// email arrives, the app opens its confirmation link. The user fills the form, solves the
+// CAPTCHA, clicks Steam's buttons, and chooses "create new account" on Steam's page.
+//
+// Two modes:
+//   - "browser": the join page and the confirmation link open in the user's default browser.
+//   - "embedded": both open in an app window. hCaptcha has rejected this window in the past.
+//     The app fills empty fields on the join page with the generated values, best effort.
+//
+// The app never solves CAPTCHAs or calls Steam's signup endpoints. Credentials live in memory
+// only and are cleared when the signup is completed, cancelled, or times out. The credentials
+// the user confirms (which may be edited) are used for the sign-in.
+
+const crypto = require("node:crypto");
+const { BrowserWindow, app, shell, session: electronSession } = require("electron");
+const { ImapFlow } = require("imapflow");
+const steamAuth = require("./steamAuth.cjs");
+const utils = require("./signupUtils.cjs");
+
+const JOIN_URL = "https://store.steampowered.com/join/";
+const FORM_POLL_MS = 2000;
+const MAIL_POLL_MS = 5000;
+const MAIL_WAIT_MS = 10 * 60 * 1000;
+// Mail sent just before the signup opened still counts.
+const MAIL_LOOKBACK_MS = 60 * 1000;
+const SIGNUP_TIMEOUT_MS = 30 * 60 * 1000;
+
+// Selectors for Steam's join page, used only in embedded mode. Not verified against the
+// live site: if Steam changes a field, update it here.
+const FIELDS = {
+  email: ["#email"],
+  emailConfirm: ["#reenter_email"],
+  accountName: ["#accountname"],
+  password: ["#password"],
+  passwordConfirm: ["#reenter_password"],
+};
+
+let active = null;
+
+function presenceScript() {
+  return `(() => {
+    const fields = ${JSON.stringify(FIELDS)};
+    const present = {};
+    for (const [key, selectors] of Object.entries(fields)) {
+      const el = selectors.map((s) => document.querySelector(s)).find(Boolean);
+      if (el) present[key] = el.value === "";
+    }
+    return present;
+  })()`;
+}
+
+// Fills only the empty fields named in values, so user edits are never overwritten.
+function fillScript(values) {
+  return `(() => {
+    const fields = ${JSON.stringify(FIELDS)};
+    const values = ${JSON.stringify(values)};
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    for (const [key, selectors] of Object.entries(fields)) {
+      if (!(key in values)) continue;
+      const el = selectors.map((s) => document.querySelector(s)).find(Boolean);
+      if (!el || el.value !== "") continue;
+      setValue.call(el, values[key]);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  })()`;
+}
+
+function valuesFor(session) {
+  return {
+    email: session.email,
+    emailConfirm: session.email,
+    accountName: session.username,
+    password: session.password,
+    passwordConfirm: session.password,
+  };
+}
+
+function setMessage(session, message) {
+  if (active === session) session.message = message;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Opens the signup. Returns the generated credentials for the user to review and edit.
+async function open(input) {
+  if (active) throw new Error("A signup is already open. Finish or cancel it first.");
+  const mode = input && input.mode === "browser" ? "browser" : "embedded";
+  const email = utils.validEmail(input && input.email);
+  const mail = utils.normalizeMailConfig(input && input.mail);
+
+  const session = {
+    mode,
+    email,
+    mail,
+    username: utils.generateUsername(),
+    password: utils.generatePassword(),
+    message: "Opening Steam's signup page...",
+    since: Date.now() - MAIL_LOOKBACK_MS,
+    watching: false,
+    win: null,
+    fillTimer: null,
+    expires: null,
+  };
+  active = session;
+  session.expires = setTimeout(() => {
+    if (active === session) reset();
+  }, SIGNUP_TIMEOUT_MS);
+
+  const credentials = { username: session.username, password: session.password, mode };
+  try {
+    if (mode === "embedded") {
+      openEmbedded(session);
+    } else {
+      await shell.openExternal(JOIN_URL);
+    }
+  } catch (error) {
+    reset();
+    throw new Error(`Could not open Steam's signup page: ${error.message}`);
+  }
+  setMessage(
+    session,
+    "Fill in the form and submit it. Waiting for Steam's confirmation email in your mailbox...",
+  );
+  watchForConfirmation(session);
+  return credentials;
+}
+
+function openEmbedded(session) {
+  // No "persist:" prefix: the session lives in memory and is dropped with the window.
+  const partition = `signup-${crypto.randomUUID()}`;
+  // Electron's default user agent carries an "Electron/x.y" token. Use the plain Chrome
+  // agent instead. This only matches a normal browser; it does not solve anything.
+  electronSession
+    .fromPartition(partition)
+    .setUserAgent(app.userAgentFallback.replace(/\s*Electron\/\S+/, ""));
+
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 820,
+    autoHideMenuBar: true,
+    title: "Steam account signup",
+    webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  session.win = win;
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith("https://")) event.preventDefault();
+  });
+  win.on("closed", () => {
+    // Closing the window does not end the signup; the confirmation still opens in the browser.
+    if (session.win === win) session.win = null;
+    clearInterval(session.fillTimer);
+  });
+  session.fillTimer = setInterval(() => fillForm(session), FORM_POLL_MS);
+  win.loadURL(JOIN_URL).catch((error) => setMessage(session, `Could not load Steam: ${error.message}`));
+}
+
+async function fillForm(session) {
+  if (session.checking || active !== session || !session.win || session.win.isDestroyed()) return;
+  session.checking = true;
+  try {
+    const present = await session.win.webContents.executeJavaScript(presenceScript(), true);
+    const wanted = valuesFor(session);
+    const values = {};
+    for (const [key, empty] of Object.entries(present)) {
+      if (empty && key in wanted) values[key] = wanted[key];
+    }
+    if (Object.keys(values).length > 0) {
+      await session.win.webContents.executeJavaScript(fillScript(values), true);
+    }
+  } catch {
+    // The page may be navigating; the next tick tries again.
+  } finally {
+    session.checking = false;
+  }
+}
+
+// Watches the mailbox for Steam's confirmation email, then opens its link.
+async function watchForConfirmation(session) {
+  if (session.watching) return;
+  session.watching = true;
+  const deadline = Date.now() + MAIL_WAIT_MS;
+  try {
+    while (active === session && Date.now() < deadline) {
+      const link = await findConfirmationLink(session.mail, session.since);
+      if (active !== session) return;
+      if (link) {
+        await openLink(session, link);
+        setMessage(
+          session,
+          session.mode === "embedded"
+            ? "Opened Steam's confirmation link in a separate window. Go back to the signup window, choose to create a new account, then check the name and password below."
+            : "Opened Steam's confirmation link. On Steam's page, choose to create a new account, then check the name and password below.",
+        );
+        return;
+      }
+      await sleep(MAIL_POLL_MS);
+    }
+    setMessage(session, "No Steam confirmation email found yet. Check your mailbox, or cancel the signup.");
+  } catch (error) {
+    setMessage(session, `Mailbox check failed: ${mailErrorText(error)}. Open Steam's confirmation link yourself.`);
+  } finally {
+    session.watching = false;
+  }
+}
+
+// imapflow reports most server rejections as "Command failed" and keeps the server's reply in
+// responseText. Show that reply, so a bad password or a missing app password is visible.
+function mailErrorText(error) {
+  const server = typeof error?.responseText === "string" ? error.responseText.trim() : "";
+  if (error?.authenticationFailed) {
+    return `the mail server rejected the login (${server || error.message}). For Gmail, use a 16-character app password, not your normal password`;
+  }
+  return server ? `${error.message} (server said: ${server})` : error?.message || "unknown error";
+}
+
+async function openLink(session, link) {
+  if (session.mode === "embedded") {
+    openLinkWindow(link);
+  } else {
+    await shell.openExternal(link);
+  }
+}
+
+// Opens the confirmation link in its own window. Loading it in the join window would replace
+// the signup form, and Steam's page expects the form window to still be open. The link window
+// closes itself once Steam shows that the email is verified.
+function openLinkWindow(link) {
+  const partition = `signup-link-${crypto.randomUUID()}`;
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 760,
+    autoHideMenuBar: true,
+    title: "Steam email verification",
+    webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith("https://")) event.preventDefault();
+  });
+  win.webContents.on("did-finish-load", async () => {
+    try {
+      const text = await win.webContents.executeJavaScript("document.body ? document.body.innerText : ''", true);
+      if (/email\s+(is\s+)?verified/i.test(text) && !win.isDestroyed()) win.close();
+    } catch {
+      // The page may still be navigating; the window stays open for the user.
+    }
+  });
+  win.loadURL(link).catch(() => {
+    if (!win.isDestroyed()) win.close();
+  });
+}
+
+// Searches INBOX and the spam folder for the newest Steam email with a confirmation link.
+async function findConfirmationLink(mail, since) {
+  const client = new ImapFlow({
+    host: mail.host,
+    port: mail.port,
+    secure: mail.port !== 143,
+    auth: { user: mail.user, pass: mail.password },
+    logger: false,
+  });
+  await client.connect();
+  try {
+    for (const folder of ["INBOX", utils.spamFolderFor(mail.host)]) {
+      const link = await findLinkInFolder(client, folder, since).catch(() => null);
+      if (link) return link;
+    }
+    return null;
+  } finally {
+    await client.logout().catch(() => client.close());
+  }
+}
+
+async function findLinkInFolder(client, folder, since) {
+  const lock = await client.getMailboxLock(folder);
+  try {
+    const uids = (await client.search({ from: "steampowered.com", since: new Date(since) }, { uid: true })) || [];
+    for (const uid of uids.slice(-5).reverse()) {
+      const message = await client.fetchOne(uid, { source: true, internalDate: true }, { uid: true });
+      if (!message || !message.source) continue;
+      if (message.internalDate && new Date(message.internalDate).getTime() < since) continue;
+      const link = utils.extractConfirmationLink(utils.decodeQuotedPrintable(message.source.toString("utf8")));
+      if (link) return link;
+    }
+    return null;
+  } finally {
+    lock.release();
+  }
+}
+
+function status() {
+  if (!active) return { open: false, message: null };
+  return { open: true, message: active.message };
+}
+
+// Called after the user has created the account on Steam's page. Starts the sign-in with the
+// credentials the user confirmed (edited values included); the caller then collects the Steam
+// Guard code as usual.
+async function complete(input) {
+  if (!active) throw new Error("No signup is open.");
+  const session = active;
+  const { username, password } = utils.validSignupCredentials(input);
+  let result;
+  try {
+    result = await steamAuth.startLogin(username, password);
+  } catch (error) {
+    throw new Error(
+      `${error.message} If the account is not finished yet, finish the signup on Steam's page and try again.`,
+    );
+  }
+  if (active === session) reset();
+  return result;
+}
+
+function cancel() {
+  reset();
+}
+
+function reset() {
+  const session = active;
+  active = null;
+  if (!session) return;
+  clearTimeout(session.expires);
+  clearInterval(session.fillTimer);
+  session.password = "";
+  session.email = "";
+  session.username = "";
+  session.mail = null;
+  if (session.win && !session.win.isDestroyed()) session.win.destroy();
+  session.win = null;
+}
+
+module.exports = { open, status, complete, cancel, FIELDS };
