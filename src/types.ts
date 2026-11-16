@@ -109,6 +109,12 @@ export type DisplayStatus =
 
 // idle: nothing to show. available: a newer release exists. downloading: fetching it.
 // downloaded: ready to install on restart.
+// Notification preferences. Both are off by default.
+export interface AppSettings {
+  notifyCooldownEnd: boolean;
+  notifyCheckFailed: boolean;
+}
+
 export interface UpdateStatus {
   state: "idle" | "available" | "downloading" | "downloaded";
   version: string | null;
@@ -165,6 +171,8 @@ export interface SahApi {
   cs2List(id: string): Promise<Cs2State>;
   cs2Import(id: string): Promise<Cs2State>;
   cs2View(id: string, snapshotId: string): Promise<Cs2Binding[]>;
+  getSettings(): Promise<AppSettings>;
+  saveSettings(change: Partial<AppSettings>): Promise<AppSettings>;
   getMailSettings(): Promise<SavedMail | null>;
   saveMailSettings(input: { email: string; mail: MailSettings }): Promise<{ ok: true }>;
   clearMailSettings(): Promise<{ ok: true }>;

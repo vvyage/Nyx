@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { Account, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
+import type { Account, AppSettings, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
 import { presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
@@ -58,6 +58,9 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   const [busy, setBusy] = useState(false);
   // Add-account card: closed by default, with a SteamID tab and a sign-in tab.
   const [addOpen, setAddOpen] = useState(false);
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  // Notification preferences, loaded once. Null until the saved values arrive.
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [addTab, setAddTab] = useState<"id" | "login" | "create">("id");
   const [steamId64, setSteamId64] = useState("");
   // Add-with-login form state.
@@ -406,6 +409,19 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
+  // Saves one notification preference. The switch changes at once and is reverted if saving fails.
+  async function changeSetting(key: keyof AppSettings, value: boolean) {
+    if (!settings) return;
+    const previous = settings;
+    setSettings({ ...settings, [key]: value });
+    try {
+      setSettings(await window.sah.saveSettings({ [key]: value }));
+    } catch (err) {
+      setSettings(previous);
+      setError(errorText(err));
+    }
+  }
+
   async function lockVault() {
     setBusy(true);
     try {
@@ -439,6 +455,17 @@ function Dashboard({ onLock }: { onLock: () => void }) {
         </div>
         <div className="actions">
           <UpdateButton onError={setError} />
+          <button
+            className={`icon-btn${notifyOpen ? " active" : ""}`}
+            title="Notifications"
+            aria-label="Notifications"
+            onClick={() => {
+              setNotifyOpen((open) => !open);
+              if (!settings) window.sah.getSettings().then(setSettings).catch(() => undefined);
+            }}
+          >
+            <Icon name="bell" />
+          </button>
           <button
             className={`icon-btn${refreshing ? " spin" : ""}`}
             title={refreshing ? checkingLabel : "Refresh cooldowns"}
@@ -513,6 +540,30 @@ function Dashboard({ onLock }: { onLock: () => void }) {
             <Icon name="x" size={14} />
           </button>
         </div>
+      )}
+
+      {notifyOpen && (
+        <section className="add-card" aria-label="Notifications">
+          <p className="muted small">Windows notifications. Both are off until you turn them on.</p>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings?.notifyCooldownEnd ?? false}
+              disabled={!settings}
+              onChange={(e) => changeSetting("notifyCooldownEnd", e.target.checked)}
+            />
+            Notify when a cooldown ends
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings?.notifyCheckFailed ?? false}
+              disabled={!settings}
+              onChange={(e) => changeSetting("notifyCheckFailed", e.target.checked)}
+            />
+            Notify when a cooldown check fails
+          </label>
+        </section>
       )}
 
       {addOpen && (

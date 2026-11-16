@@ -365,6 +365,21 @@ async function submitEmailCode(pendingId, mail, since) {
   return { submitted: false, note: "No Steam Guard email reached the mailbox in time." };
 }
 
+// Waits for a Steam Guard email received since `since` and returns its code, without submitting
+// it anywhere. Used by a separate Steam login (the CS2 license request). Throws when the mailbox
+// cannot be read or no code arrives in time.
+async function waitForMailCode(mail, since) {
+  const deadline = Date.now() + STEAM_CODE_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(STEAM_CODE_POLL_MS);
+    const code = await withMailbox(mail, (client) =>
+      newestAcrossFolders(client, mail, since, utils.extractSteamGuardCode),
+    );
+    if (code) return code;
+  }
+  throw new Error("No Steam Guard email reached the mailbox in time.");
+}
+
 // Fills in the Steam Guard email code when Steam asks for one and a mailbox is available.
 // Returns { codeFromMail, mailNote } for the renderer. Without a mailbox, nothing happens.
 async function submitEmailCodeIfNeeded(start, mail, since) {
@@ -418,4 +433,4 @@ function reset() {
   session.win = null;
 }
 
-module.exports = { open, status, complete, cancel, submitEmailCodeIfNeeded, STEAM_CODE_LOOKBACK_MS, FIELDS };
+module.exports = { open, status, complete, cancel, submitEmailCodeIfNeeded, waitForMailCode, STEAM_CODE_LOOKBACK_MS, FIELDS };

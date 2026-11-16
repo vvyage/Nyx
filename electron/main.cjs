@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Notification, screen } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
@@ -8,6 +8,10 @@ const steamAuth = require("./steamAuth.cjs");
 const signupHelper = require("./signupHelper.cjs");
 const signupUtils = require("./signupUtils.cjs");
 const cs2Config = require("./cs2Config.cjs");
+const settingsStore = require("./settings.cjs");
+const SteamUser = require("steam-user");
+const { createFreeLicenseRequester } = require("./freeLicense.cjs");
+const { findEndedCooldowns } = require("./notifyRules.cjs");
 const { createTokenVault } = require("./tokenVault.cjs");
 const { parseSteamIdInput, fetchProfileSummary } = require("./steamProfile.cjs");
 const { autoUpdater } = require("electron-updater");
@@ -30,10 +34,50 @@ const iconPath = path.join(__dirname, "..", "src", "assets", "logo.png");
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 const AUTO_REFRESH_FIRST_MS = 5 * 1000;
 const ACTIVE_POLL_MS = 10 * 1000;
+const COOLDOWN_CHECK_MS = 60 * 1000;
 
 // Only parsed results are stored: no HTML, passwords, cookies, or tokens.
 const storePath = () => path.join(app.getPath("userData"), "accounts.json");
 const cs2StorePath = () => path.join(app.getPath("userData"), "cs2-configs");
+const settingsPath = () => path.join(app.getPath("userData"), "settings.json");
+
+// Cooldown endings are announced only if they happen after this moment.
+const sessionStartMs = Date.now();
+// Keys ("accountId|expiresAt") of cooldown endings already handled this session.
+const announcedEndings = new Set();
+
+// Shows a Windows notification. Clicking it brings the main window forward.
+function notify(title, body) {
+  if (!Notification.isSupported()) return;
+  const note = new Notification({ title, body });
+  note.on("click", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  note.show();
+}
+
+// Finds cooldowns that ended since the last check. The endings are tracked even when the
+// setting is off, so enabling it later does not announce old endings.
+function checkCooldownEndings() {
+  const ended = findEndedCooldowns(loadAccounts(), {
+    sessionStartMs,
+    nowMs: Date.now(),
+    announced: announcedEndings,
+  });
+  if (!settingsStore.loadSettings(settingsPath()).notifyCooldownEnd) return;
+  for (const account of ended) {
+    notify("Cooldown ended", `${account.name || account.steamId64} can queue for matchmaking again.`);
+  }
+}
+
+// Announces a failed read, when the user has asked for that. The reason never contains secrets.
+function reportCheckFailure(label, reason) {
+  if (!settingsStore.loadSettings(settingsPath()).notifyCheckFailed) return;
+  notify("Cooldown check failed", `${label}: ${String(reason).slice(0, 160)}`);
+}
 
 // Whether Steam has CS2 settings for the account on this PC, plus the stored backups.
 async function cs2Summary(account) {
@@ -323,6 +367,7 @@ function refreshCooldowns(onlyId = null) {
         if (result) {
           storePageResult(account.id, result);
           addProgressLog(`${label}: ${describeResult(result)}`);
+          if (result.status === "unknown") reportCheckFailure(label, result.reason);
         } else {
           addProgressLog(`${label}: skipped, vault is locked`);
         }
@@ -334,6 +379,7 @@ function refreshCooldowns(onlyId = null) {
           reason: `Page read failed: ${reason}`,
         });
         addProgressLog(`${label}: read failed`);
+        reportCheckFailure(label, `Page read failed: ${reason}`);
       }
       setRefreshProgress({ done: refreshProgress.done + 1 });
       notifyRenderer();
@@ -544,6 +590,9 @@ function registerIpc() {
       }
     }
     tokenVault().saveToken(result.steamId64, result.refreshToken);
+    // Credentials of the signup this sign-in completes, if it is one.
+    const signupLogin =
+      !accountId && pendingSignupLogin && pendingSignupLogin.pendingId === input.pendingId ? pendingSignupLogin : null;
     // A manual save from the panel replaces the draft. A sign-in from the signup flow fills
     // the new account's panel with the generated login.
     if (accountId) {
@@ -555,6 +604,11 @@ function registerIpc() {
     updateAccount(targetId, (item) => {
       item.tokenSaved = true;
     });
+    // A new signup account gets the free CS2 license now, so it can play. A failure is
+    // reported in the message and does not undo the saved login.
+    if (signupLogin) {
+      message += ` ${await requestSignupLicense(signupLogin, result.steamId64)}`;
+    }
     // Read the new account's cooldown right away, as "Check now" does. A read failure is
     // stored on the account by refreshCooldowns and must not fail the saved login.
     await refreshCooldowns(targetId).catch(() => {});
@@ -673,6 +727,16 @@ function registerIpc() {
     return { ok: true };
   });
 
+  // User preferences (notifications). Only known boolean keys are accepted.
+  ipcMain.handle("settings:get", () => settingsStore.loadSettings(settingsPath()));
+  ipcMain.handle("settings:save", (_event, change) => {
+    const safe = {};
+    for (const key of Object.keys(settingsStore.DEFAULTS)) {
+      if (change && typeof change[key] === "boolean") safe[key] = change[key];
+    }
+    return settingsStore.saveSettings(settingsPath(), safe);
+  });
+
   ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("update:status", async () => updater.getStatus());
   ipcMain.handle("update:download", async () => updater.download());
@@ -680,6 +744,35 @@ function registerIpc() {
     updater.install();
     return { ok: true };
   });
+}
+
+// Requests the free CS2 license for an account created by the signup flow. The Steam Guard
+// code is read from the saved mailbox, so without one the request is skipped. Returns a short
+// note for the sign-in message. Skipped if Steam's client is signed in as this account, since a
+// second login could disconnect it.
+async function requestSignupLicense(login, steamId64) {
+  const activeId = await steamClient.activeSteamId64().catch(() => null);
+  if (activeId === steamId64) {
+    return "CS2 license not requested: this account is signed in to the Steam client. Sign it out there and try again.";
+  }
+  const mail = tokenVault().getMailSettings();
+  if (!mail) {
+    return "CS2 license not requested: save the mailbox login so the Steam Guard code can be read.";
+  }
+  const since = Date.now() - signupHelper.STEAM_CODE_LOOKBACK_MS;
+  const requestCs2License = createFreeLicenseRequester({ SteamUser });
+  try {
+    const outcome = await requestCs2License({
+      accountName: login.accountName,
+      password: login.password,
+      getGuardCode: () => signupHelper.waitForMailCode(mail, since),
+    });
+    return outcome.granted
+      ? "CS2 license granted."
+      : "Steam returned no new CS2 license (the account may already have one).";
+  } catch (error) {
+    return `CS2 license not granted: ${error.message}`;
+  }
 }
 
 // Checks GitHub Releases for a newer build (packaged builds only). See updater.cjs.
@@ -865,6 +958,10 @@ function registerWindowControls() {
   });
 }
 
+// Windows groups notifications under this id. It matches the installer's appId so
+// notifications from the installed app and from `npm start` are attributed the same way.
+app.setAppUserModelId("local.steamaccounthelper");
+
 app.whenReady().then(() => {
   // Removes the File / Edit / View / Window menu bar.
   Menu.setApplicationMenu(null);
@@ -888,6 +985,7 @@ app.whenReady().then(() => {
     }
   }, ACTIVE_POLL_MS);
   setInterval(() => refreshCooldowns().catch(() => {}), AUTO_REFRESH_MS);
+  setInterval(checkCooldownEndings, COOLDOWN_CHECK_MS);
   updater.start();
 });
 

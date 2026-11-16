@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("sah", {
   cs2List: (id) => ipcRenderer.invoke("cs2:list", id),
   cs2Import: (id) => ipcRenderer.invoke("cs2:import", id),
   cs2View: (id, snapshotId) => ipcRenderer.invoke("cs2:view", id, snapshotId),
+  getSettings: () => ipcRenderer.invoke("settings:get"),
+  saveSettings: (change) => ipcRenderer.invoke("settings:save", change),
   getMailSettings: () => ipcRenderer.invoke("mail:get"),
   saveMailSettings: (input) => ipcRenderer.invoke("mail:save", input),
   clearMailSettings: () => ipcRenderer.invoke("mail:clear"),
