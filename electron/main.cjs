@@ -509,6 +509,24 @@ function registerIpc() {
     return cs2Config.readBindings(cs2StorePath(), account.steamId64, requireString(snapshotId, "Backup", 40));
   });
 
+  // Editable settings (video and convars) of one backup.
+  ipcMain.handle("cs2:settings", (_event, id, snapshotId) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    return cs2Config.readSettings(cs2StorePath(), account.steamId64, requireString(snapshotId, "Backup", 40));
+  });
+
+  // Saves edits as a new backup. Steam's files are not changed. Returns the new backup's ID.
+  ipcMain.handle("cs2:saveSettings", async (_event, id, snapshotId, changes) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    const meta = cs2Config.saveSettings({
+      storeRoot: cs2StorePath(),
+      steamId64: account.steamId64,
+      snapshotId: requireString(snapshotId, "Backup", 40),
+      changes,
+    });
+    return { state: await cs2Summary(account), snapshotId: meta.id };
+  });
+
   ipcMain.handle("vault:status", async () => tokenVault().status());
 
   // Creates the vault. Returns the recovery code once; the renderer must show it and
@@ -532,6 +550,7 @@ function registerIpc() {
     steamAuth.cancelAllPending();
     signupHelper.cancel();
     closePanel();
+    closeCs2();
     tokenVault().lock();
     loginDrafts.clear();
     pendingSignupLogin = null;
@@ -838,8 +857,8 @@ function createWindow() {
     webPreferences: webPreferences(),
   });
   mainWindow.center();
-  // The attached panel follows the main window while it is dragged.
-  mainWindow.on("move", placePanel);
+  // The attached windows follow the main window while it is dragged.
+  mainWindow.on("move", placeAttached);
   // Closing fades the window out in the main process; the real close follows it.
   let closing = false;
   mainWindow.on("close", (event) => {
@@ -847,6 +866,7 @@ function createWindow() {
     event.preventDefault();
     closing = true;
     closePanel();
+    closeCs2();
     const win = mainWindow;
     fadeOut(win).then(() => {
       if (!win.isDestroyed()) win.close();
@@ -929,6 +949,62 @@ function placePanel() {
   panelWindow.setBounds({ x, y: bounds.y, width: PANEL_WIDTH, height: bounds.height });
 }
 
+// The CS2 window sits across the top of the main window, the same width. It is a separate
+// window above the main one, so the main title bar stays free to drag. When there is no room
+// above on screen, it goes below the main window instead.
+const CS2_HEIGHT = 470;
+let cs2Window = null;
+// True while the CS2 window is fading out, so it is not closed twice.
+let cs2Closing = false;
+
+function openCs2(accountId) {
+  if (!mainWindow) return;
+  if (cs2Window) {
+    cs2Window.webContents.send("cs2:select", accountId);
+    if (cs2Window.isMinimized()) cs2Window.restore();
+    cs2Window.focus();
+    return;
+  }
+  const win = new BrowserWindow({
+    ...LOCKED_WINDOW,
+    parent: mainWindow,
+    width: mainWindow.getBounds().width,
+    height: CS2_HEIGHT,
+    webPreferences: webPreferences(),
+  });
+  cs2Window = win;
+  placeCs2();
+  win.on("closed", () => {
+    cs2Window = null;
+    cs2Closing = false;
+  });
+  win.loadFile(indexPath, { query: { cs2: accountId } });
+}
+
+function closeCs2() {
+  const win = cs2Window;
+  if (!win || win.isDestroyed() || cs2Closing) return;
+  cs2Closing = true;
+  fadeOut(win).then(() => {
+    if (!win.isDestroyed()) win.close();
+  });
+}
+
+function placeCs2() {
+  if (!mainWindow || !cs2Window || mainWindow.isDestroyed() || cs2Window.isDestroyed()) return;
+  const bounds = mainWindow.getBounds();
+  const area = screen.getDisplayMatching(bounds).workArea;
+  let y = bounds.y - CS2_HEIGHT;
+  if (y < area.y) y = bounds.y + bounds.height;
+  cs2Window.setBounds({ x: bounds.x, y, width: bounds.width, height: CS2_HEIGHT });
+}
+
+// Keeps every attached window beside the main window.
+function placeAttached() {
+  placePanel();
+  placeCs2();
+}
+
 // Title bar controls. The sender's window is the one that was clicked.
 function registerWindowControls() {
   // Shows the window once its renderer has mounted, so the wipe-in starts on screen.
@@ -949,11 +1025,20 @@ function registerWindowControls() {
   ipcMain.handle("panel:close", () => {
     closePanel();
   });
+  // Opens the CS2 window across the top for one account, or retargets it when already open.
+  ipcMain.handle("cs2:open", (_event, id) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    openCs2(account.id);
+  });
+  ipcMain.handle("cs2:close", () => {
+    closeCs2();
+  });
   ipcMain.handle("window:close", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
-    // The panel fades out itself; the main window plays its close animation in its close handler.
+    // The attached windows fade out themselves; the main window plays its close animation in its close handler.
     if (win === panelWindow) closePanel();
+    else if (win === cs2Window) closeCs2();
     else win.close();
   });
 }

@@ -9,14 +9,14 @@ test("generated usernames are valid Steam account names", () => {
   }
 });
 
-test("generated passwords have all four character classes and the right length", () => {
+test("generated passwords are letters and digits, with both cases and a digit, and the right length", () => {
   for (let i = 0; i < 50; i++) {
     const password = utils.generatePassword();
     assert.equal(password.length, 20);
+    assert.match(password, /^[A-Za-z0-9]{20}$/);
     assert.match(password, /[a-z]/);
     assert.match(password, /[A-Z]/);
     assert.match(password, /\d/);
-    assert.match(password, /[!@#$%^&*]/);
   }
 });
 

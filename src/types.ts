@@ -127,7 +127,22 @@ export interface Cs2Snapshot {
   createdAt: string;
   bindingCount: number | null;
   bindingNote: string | null;
+  // Set on backups made by saving edits: the backup the edits started from, and how many values changed.
+  basedOn?: string;
+  changedSettings?: number;
   files: { name: string; size: number; sha256: string }[];
+}
+
+// One editable setting of a backup: a video option or a convar. Values are strings, as in the file.
+export interface Cs2Setting {
+  key: string;
+  value: string;
+}
+
+// Editable settings of one backup. A file missing from the backup is null.
+export interface Cs2Settings {
+  video: Cs2Setting[] | null;
+  convars: Cs2Setting[] | null;
 }
 
 export interface Cs2State {
@@ -171,6 +186,15 @@ export interface SahApi {
   cs2List(id: string): Promise<Cs2State>;
   cs2Import(id: string): Promise<Cs2State>;
   cs2View(id: string, snapshotId: string): Promise<Cs2Binding[]>;
+  cs2Settings(id: string, snapshotId: string): Promise<Cs2Settings>;
+  cs2SaveSettings(
+    id: string,
+    snapshotId: string,
+    changes: { video?: Record<string, string>; convars?: Record<string, string> },
+  ): Promise<{ state: Cs2State; snapshotId: string }>;
+  cs2Open(id: string): Promise<void>;
+  cs2Close(): Promise<void>;
+  onCs2Select(callback: (id: string) => void): () => void;
   getSettings(): Promise<AppSettings>;
   saveSettings(change: Partial<AppSettings>): Promise<AppSettings>;
   getMailSettings(): Promise<SavedMail | null>;

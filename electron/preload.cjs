@@ -29,6 +29,17 @@ contextBridge.exposeInMainWorld("sah", {
   cs2List: (id) => ipcRenderer.invoke("cs2:list", id),
   cs2Import: (id) => ipcRenderer.invoke("cs2:import", id),
   cs2View: (id, snapshotId) => ipcRenderer.invoke("cs2:view", id, snapshotId),
+  cs2Settings: (id, snapshotId) => ipcRenderer.invoke("cs2:settings", id, snapshotId),
+  cs2SaveSettings: (id, snapshotId, changes) => ipcRenderer.invoke("cs2:saveSettings", id, snapshotId, changes),
+  // Opens (or re-targets) the CS2 window across the top of the main window.
+  cs2Open: (id) => ipcRenderer.invoke("cs2:open", id),
+  cs2Close: () => ipcRenderer.invoke("cs2:close"),
+  // Fired in the CS2 window when the main window asks for another account.
+  onCs2Select: (callback) => {
+    const listener = (_event, id) => callback(id);
+    ipcRenderer.on("cs2:select", listener);
+    return () => ipcRenderer.removeListener("cs2:select", listener);
+  },
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (change) => ipcRenderer.invoke("settings:save", change),
   getMailSettings: () => ipcRenderer.invoke("mail:get"),

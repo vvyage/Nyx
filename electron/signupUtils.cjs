@@ -4,7 +4,9 @@
 const crypto = require("node:crypto");
 
 const USERNAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
-const PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*";
+// Letters and digits only. A generated password with symbols (!@#$%^&*) was refused by Steam's
+// join page with "The password you entered is not allowed".
+const PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 const PASSWORD_LENGTH = 20;
 
 function randomFrom(chars, length) {
@@ -18,11 +20,11 @@ function generateUsername() {
   return `sah_${randomFrom(USERNAME_CHARS, 10)}`;
 }
 
-// A random password that has a lowercase letter, an uppercase letter, a digit, and a symbol.
+// A random password that has a lowercase letter, an uppercase letter, and a digit.
 function generatePassword() {
   for (let attempt = 0; attempt < 100; attempt++) {
     const password = randomFrom(PASSWORD_CHARS, PASSWORD_LENGTH);
-    if (/[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[!@#$%^&*]/.test(password)) {
+    if (/[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password)) {
       return password;
     }
   }

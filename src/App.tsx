@@ -4,17 +4,31 @@ import { presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
 import { AccountWindow } from "./AccountPanel";
+import { Cs2Window } from "./Cs2Window";
 import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock } from "./shared";
 import { Icon } from "./Icon";
 
-// The same bundle serves the main window and the attached account panel (?panel=<id>).
-const panelId = new URLSearchParams(window.location.search).get("panel");
+// The same bundle serves the main window, the attached account panel (?panel=<id>), and the
+// attached CS2 settings window (?cs2=<id>).
+const params = new URLSearchParams(window.location.search);
+const panelId = params.get("panel");
+const cs2Id = params.get("cs2");
+
+// Shown over the add card while a Steam sign-in runs. A Steam Guard email can add a wait of up to a minute.
+const SIGNING_IN_MESSAGE = "Signing in to Steam. This can take up to a minute.";
 
 export function App() {
   if (panelId) {
     return (
       <Frame title="Account" draggable={false} minimizable={false} closable={false}>
         <AccountWindow initialId={panelId} />
+      </Frame>
+    );
+  }
+  if (cs2Id) {
+    return (
+      <Frame title="CS2 settings" draggable={false} minimizable={false}>
+        <Cs2Window initialId={cs2Id} />
       </Frame>
     );
   }
@@ -56,13 +70,14 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Add-account card: closed by default, with a SteamID tab and a sign-in tab.
+  // Add-account card: closed by default, with a sign-in tab and a create tab.
   const [addOpen, setAddOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
   // Notification preferences, loaded once. Null until the saved values arrive.
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [addTab, setAddTab] = useState<"id" | "login" | "create">("id");
-  const [steamId64, setSteamId64] = useState("");
+  const [addTab, setAddTab] = useState<"login" | "create">("login");
+  // Set while a sign-in runs: shown on the add card in place of the form. Null when idle.
+  const [signingIn, setSigningIn] = useState<string | null>(null);
   // Add-with-login form state.
   const [newLoginName, setNewLoginName] = useState("");
   const [newLoginPassword, setNewLoginPassword] = useState("");
@@ -165,14 +180,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
-  async function addAccount() {
-    const id = steamId64.trim();
-    if (await run(() => window.sah.addAccount({ steamId64: id }))) {
-      setSteamId64("");
-      setAddOpen(false);
-    }
-  }
-
   async function syncFromSteam() {
     if (await run(() => window.sah.importRemembered())) {
       setNotice("Synced accounts from Steam.");
@@ -229,6 +236,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       return;
     }
     setBusy(true);
+    setSigningIn(SIGNING_IN_MESSAGE);
     try {
       const start = await window.sah.loginStart({
         accountName: newLoginName.trim(),
@@ -251,12 +259,14 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setSigningIn(null);
     }
   }
 
   async function submitNewGuardCode() {
     if (!newLoginGuard) return;
     setBusy(true);
+    setSigningIn("Checking the Steam Guard code...");
     setError(null);
     try {
       await window.sah.loginCode({ pendingId: newLoginGuard.pendingId, code: newGuardCode.trim() });
@@ -265,6 +275,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setSigningIn(null);
     }
   }
 
@@ -300,10 +311,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
-  function copyText(text: string) {
-    navigator.clipboard.writeText(text).catch(() => setError("Could not copy to the clipboard."));
-  }
-
   // Opens Steam's signup page in the chosen mode. The generated credentials are shown,
   // editable, until the signup ends.
   async function openSignup() {
@@ -325,7 +332,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setSignupUser(creds.username);
       setSignupPass(creds.password);
       setSignupMessage("Opening Steam's signup page...");
-      if (creds.mode === "browser") copyText(signupEmail.trim());
       if (saveMailChoice && signupMailPassword) {
         const mail = {
           host: signupHost,
@@ -386,6 +392,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   // the usual Steam Guard step.
   async function finishSignup() {
     setBusy(true);
+    setSigningIn(SIGNING_IN_MESSAGE);
     setError(null);
     setNotice(null);
     try {
@@ -406,6 +413,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setSigningIn(null);
     }
   }
 
@@ -567,11 +575,14 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       )}
 
       {addOpen && (
-        <section className="add-card">
+        <section className={`add-card${signingIn ? " busy" : ""}`} aria-busy={signingIn ? true : undefined}>
+          {signingIn && (
+            <div className="busy-overlay" role="status" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />
+              <span>{signingIn}</span>
+            </div>
+          )}
           <div className="tabs">
-            <button className={addTab === "id" ? "tab active" : "tab"} onClick={() => setAddTab("id")}>
-              SteamID64
-            </button>
             <button className={addTab === "login" ? "tab active" : "tab"} onClick={() => setAddTab("login")}>
               Sign in
             </button>
@@ -604,9 +615,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <button className="ghost" onClick={() => copyText(signupUser)} disabled={!signupUser}>
-                    Copy
-                  </button>
                 </div>
                 <div className="row">
                   <input
@@ -616,18 +624,12 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <button className="ghost" onClick={() => copyText(signupPass)} disabled={!signupPass}>
-                    Copy
-                  </button>
                 </div>
                 <p className="muted small">{signupMessage ?? "Working..."}</p>
                 <div className="row">
                   <button onClick={finishSignup} disabled={busy || !signupUser.trim() || !signupPass}>
                     <Icon name="check" />
                     Account created, sign in
-                  </button>
-                  <button className="ghost" onClick={() => copyText(signupEmail.trim())} disabled={busy}>
-                    Copy email
                   </button>
                   <button className="ghost" onClick={cancelSignup} disabled={busy}>
                     Cancel signup
@@ -732,21 +734,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                 )}
               </>
             )
-          ) : addTab === "id" ? (
-            <>
-              <div className="row">
-                <input
-                  placeholder="SteamID64 or steamcommunity.com/profiles/... link"
-                  value={steamId64}
-                  onChange={(e) => setSteamId64(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && steamId64.trim() && !busy && addAccount()}
-                />
-                <button onClick={addAccount} disabled={busy || !steamId64.trim()}>
-                  <Icon name="plus" />
-                  Add
-                </button>
-              </div>
-            </>
           ) : (
             <div className="row">
               <input
@@ -770,11 +757,9 @@ function Dashboard({ onLock }: { onLock: () => void }) {
             </div>
           )}
           <p className="muted small">
-            {addTab === "id"
-              ? "Adds an account by its SteamID64 or profile link."
-              : addTab === "create"
-                ? "Generates a username and password, opens Steam's signup page, and watches your mailbox for Steam's confirmation email, then opens its link. You fill the form, solve the CAPTCHA, and choose to create a new account."
-                : "The password is not stored. Only a refresh token is kept in the encrypted vault."}
+            {addTab === "create"
+              ? "Generates a username and password, opens Steam's signup page, and watches your mailbox for Steam's confirmation email, then opens its link. You fill the form, solve the CAPTCHA, and choose to create a new account."
+              : "The password is not stored. Only a refresh token is kept in the encrypted vault."}
           </p>
         </section>
       )}
@@ -825,6 +810,17 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   state={account.webSignedIn ? "on" : "off"}
                   title={account.webSignedIn ? "Web session saved" : "No web session"}
                 />
+                <button
+                  className="ghost small"
+                  title="CS2 settings and backups"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.sah.cs2Open(account.id).catch((err) => setError(errorText(err)));
+                  }}
+                >
+                  <Icon name="key" size={13} />
+                  CS2
+                </button>
                 <button
                   className="ghost small sign-in"
                   disabled={busy || !!signInBlock(account)}

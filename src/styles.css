@@ -420,6 +420,7 @@ textarea {
 
 /* Add-account card */
 .add-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -428,6 +429,34 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 12px;
   backdrop-filter: blur(10px);
+}
+/* Sign-in in progress: the form dims and ignores input under a spinner. */
+.add-card.busy > :not(.busy-overlay) {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.busy-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-radius: 12px;
+  background: rgba(11, 13, 19, 0.55);
+  color: var(--text);
+  font-size: 13px;
+  cursor: progress;
+}
+.spinner {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
 }
 .tabs {
   display: flex;
@@ -928,7 +957,130 @@ p {
   font-size: 13px;
 }
 
-/* CS2 settings section (AccountPanel.tsx) */
+/* CS2 settings window, attached across the top of the main window (Cs2Window.tsx) */
+.cs2-window {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  background: rgba(11, 13, 19, 0.6);
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+}
+.cs2-window > .banner {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.cs2-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.cs2-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.cs2-title b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs2-select {
+  min-width: 240px;
+  max-width: 300px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.cs2-inline-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 480px;
+  font-size: 12px;
+}
+.cs2-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.cs2-filter {
+  width: 240px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.cs2-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.cs2-group + .cs2-group {
+  margin-top: 12px;
+}
+.cs2-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+.cs2-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 6px 14px;
+}
+.cs2-setting {
+  display: grid;
+  grid-template-columns: 1fr 150px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.cs2-setting > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cs2-setting input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cs2-setting.edited > span {
+  color: var(--text);
+}
+.cs2-setting.edited input {
+  border-color: var(--warn);
+}
+.cs2-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.cs2-body .cs2-binds {
+  max-height: none;
+}
+
+/* CS2 shared styles: confirmations and the keybind list */
 .cs2-confirm {
   display: flex;
   flex-direction: column;
