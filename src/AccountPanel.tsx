@@ -86,6 +86,45 @@ function AccountPanel({
   const [loginGuard, setLoginGuard] = useState<LoginStart | null>(null);
   const [guardCode, setGuardCode] = useState("");
   const [manualValue, setManualValue] = useState("");
+  // Result of the last mailbox lookup for a Steam Guard code, or null when not shown.
+  const [mailCode, setMailCode] = useState<{ code: string | null; note: string } | null>(null);
+  const [mailCodeBusy, setMailCodeBusy] = useState(false);
+
+  // Password shown in the panel. Loaded from the vault only when the user asks for it.
+  const [shownPassword, setShownPassword] = useState<string | null>(null);
+
+  async function copyText(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`${what} copied.`);
+    } catch {
+      setError(`Could not copy the ${what.toLowerCase()}.`);
+    }
+  }
+
+  // Loads the stored password. With copy=true it goes to the clipboard, otherwise it is shown.
+  async function revealPassword(copy: boolean) {
+    try {
+      setError(null);
+      const { password } = await window.sah.getAccountPassword(account.id);
+      if (copy) await copyText(password, "Password");
+      else setShownPassword(password);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  async function lookupMailCode() {
+    setMailCodeBusy(true);
+    setMailCode(null);
+    try {
+      setMailCode(await window.sah.getGuardCode());
+    } catch (e) {
+      setMailCode({ code: null, note: errorText(e) });
+    } finally {
+      setMailCodeBusy(false);
+    }
+  }
 
   // Runs an IPC call with busy/error handling. Returns true on success.
   async function run(action: () => Promise<Account[]>): Promise<boolean> {
@@ -233,6 +272,38 @@ function AccountPanel({
         <DetailStatus status={status} now={now} />
       </div>
 
+      <Section icon="key" title="Login details">
+        <div className="row">
+          <span className="muted small">Name</span>
+          <code>{account.steam?.accountName ?? "Unknown"}</code>
+          <button
+            disabled={!account.steam?.accountName}
+            onClick={() => copyText(account.steam?.accountName ?? "", "Name")}
+          >
+            Copy
+          </button>
+        </div>
+        <div className="row">
+          <span className="muted small">SteamID64</span>
+          <code>{account.steamId64}</code>
+          <button onClick={() => copyText(account.steamId64, "SteamID64")}>Copy</button>
+        </div>
+        <div className="row">
+          <span className="muted small">Password</span>
+          <code>{shownPassword ?? "••••••••"}</code>
+          {account.passwordSaved ? (
+            <>
+              <button onClick={() => (shownPassword !== null ? setShownPassword(null) : revealPassword(false))}>
+                {shownPassword !== null ? "Hide" : "Show"}
+              </button>
+              <button onClick={() => revealPassword(true)}>Copy</button>
+            </>
+          ) : (
+            <span className="muted small">Not saved yet. Use Save login below.</span>
+          )}
+        </div>
+      </Section>
+
       <Section icon="monitor" title="Steam">
         <p className="muted small">
           {account.steamSignedIn
@@ -247,7 +318,7 @@ function AccountPanel({
             ? "Filled with the login generated during signup. Save login again to keep it current."
             : account.loginSaved
               ? "Refresh token saved in the encrypted vault. Save again if it is rejected."
-              : "The password is not stored. Only a refresh token is kept, encrypted in the vault."}
+              : "Password and refresh token are kept encrypted in the vault."}
         </p>
         {loginGuard ? (
           <div className="row">
@@ -264,6 +335,23 @@ function AccountPanel({
           </div>
         ) : (
           <div className="stack">
+            <div className="row">
+              <button onClick={lookupMailCode} disabled={mailCodeBusy || busy}>
+                <Icon name="key" />
+                {mailCodeBusy ? "Reading mailbox..." : "Get Steam Guard code"}
+              </button>
+            </div>
+            {mailCode && (
+              <div className="row">
+                {mailCode.code ? (
+                  <>
+                    <code className="sid">{mailCode.code}</code>
+                    <button onClick={() => navigator.clipboard.writeText(mailCode.code ?? "")}>Copy</button>
+                  </>
+                ) : null}
+                <span className="muted small">{mailCode.note}</span>
+              </div>
+            )}
             <input
               placeholder="Steam account name"
               value={loginName}
@@ -272,7 +360,7 @@ function AccountPanel({
             />
             <input
               type="password"
-              placeholder="Password (not stored)"
+              placeholder="Password"
               value={loginPassword}
               onChange={(e) => setLoginPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && loginName.trim() && loginPassword && startSavedLogin()}

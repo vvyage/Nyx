@@ -76,10 +76,25 @@ function createTokenVault(filePath) {
       return record ? record.refreshToken : null;
     },
 
-    saveToken(steamId64, refreshToken) {
-      const list = records().filter((item) => item.steamId64 !== steamId64);
-      list.push({ steamId64, refreshToken, savedAt: new Date().toISOString() });
+    // Saves the refresh token. A password, when given, is saved with it. Without one, the
+    // password already stored for the account is kept.
+    saveToken(steamId64, refreshToken, password) {
+      const all = records();
+      const previous = all.find((item) => item.steamId64 === steamId64);
+      const list = all.filter((item) => item.steamId64 !== steamId64);
+      const kept = typeof password === "string" ? password : previous ? previous.password : undefined;
+      list.push({
+        steamId64,
+        refreshToken,
+        ...(kept !== undefined ? { password: kept } : {}),
+        savedAt: new Date().toISOString(),
+      });
       storeRecords(list);
+    },
+
+    getPassword(steamId64) {
+      const record = records().find((item) => item.steamId64 === steamId64);
+      return record && typeof record.password === "string" ? record.password : null;
     },
 
     removeToken(steamId64) {

@@ -380,6 +380,14 @@ async function waitForMailCode(mail, since) {
   throw new Error("No Steam Guard email reached the mailbox in time.");
 }
 
+// The newest Steam Guard code in the mailbox from the last `windowMs`, or null. A single check,
+// no waiting. The code may belong to any account the mailbox receives, so the caller shows it
+// for the user to match against the sign-in.
+async function latestGuardCode(mail, windowMs) {
+  const since = Date.now() - windowMs;
+  return withMailbox(mail, (client) => newestAcrossFolders(client, mail, since, utils.extractSteamGuardCode));
+}
+
 // Fills in the Steam Guard email code when Steam asks for one and a mailbox is available.
 // Returns { codeFromMail, mailNote } for the renderer. Without a mailbox, nothing happens.
 async function submitEmailCodeIfNeeded(start, mail, since) {
@@ -433,4 +441,14 @@ function reset() {
   session.win = null;
 }
 
-module.exports = { open, status, complete, cancel, submitEmailCodeIfNeeded, waitForMailCode, STEAM_CODE_LOOKBACK_MS, FIELDS };
+module.exports = {
+  open,
+  status,
+  complete,
+  cancel,
+  submitEmailCodeIfNeeded,
+  waitForMailCode,
+  latestGuardCode,
+  STEAM_CODE_LOOKBACK_MS,
+  FIELDS,
+};

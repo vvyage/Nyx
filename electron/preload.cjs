@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld("sah", {
   getMailSettings: () => ipcRenderer.invoke("mail:get"),
   saveMailSettings: (input) => ipcRenderer.invoke("mail:save", input),
   clearMailSettings: () => ipcRenderer.invoke("mail:clear"),
+  getGuardCode: () => ipcRenderer.invoke("mail:guardCode"),
+  getAccountPassword: (id) => ipcRenderer.invoke("accounts:password", id),
   getUpdateStatus: () => ipcRenderer.invoke("update:status"),
   downloadUpdate: () => ipcRenderer.invoke("update:download"),
   installUpdate: () => ipcRenderer.invoke("update:install"),

@@ -33,6 +33,7 @@ export interface Account {
   steamSignedIn: boolean;
   // True when a refresh token for this account is stored in the encrypted vault.
   loginSaved: boolean;
+  passwordSaved: boolean;
 }
 
 export interface CooldownProgress {
@@ -200,6 +201,8 @@ export interface SahApi {
   getMailSettings(): Promise<SavedMail | null>;
   saveMailSettings(input: { email: string; mail: MailSettings }): Promise<{ ok: true }>;
   clearMailSettings(): Promise<{ ok: true }>;
+  getGuardCode(): Promise<{ code: string | null; note: string }>;
+  getAccountPassword(id: string): Promise<{ password: string }>;
   getUpdateStatus(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<{ ok: true }>;

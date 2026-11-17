@@ -75,7 +75,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   const [notifyOpen, setNotifyOpen] = useState(false);
   // Notification preferences, loaded once. Null until the saved values arrive.
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [addTab, setAddTab] = useState<"login" | "create">("login");
+  const [addTab, setAddTab] = useState<"login" | "create">("create");
   // Set while a sign-in runs: shown on the add card in place of the form. Null when idle.
   const [signingIn, setSigningIn] = useState<string | null>(null);
   // Add-with-login form state.
