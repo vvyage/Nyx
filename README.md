@@ -1,7 +1,9 @@
 # Nyx - Steam Account Loader / Helper
 
-Windows desktop app that tracks each Steam account's CS2 matchmaking cooldown.
+Vibe coded shiish that tracks each Steam account's CS2 matchmaking cooldown and allows you to create accs easily from the program.
+Works okayishly i guess.
 Everything stays on your PC. Accounts, the encrypted vault live in `%APPDATA%\steam-account-helper\`.
+Requirements: Windows 10 or 11
 
 ## Install (end users)
 
@@ -30,7 +32,6 @@ Everything stays on your PC. Accounts, the encrypted vault live in `%APPDATA%\st
 ## Build from source
 
 Requirements: Windows 10 or 11, Node.js LTS.
-
 ```powershell
 cd app
 npm install
