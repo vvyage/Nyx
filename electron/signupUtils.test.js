@@ -26,6 +26,12 @@ test("extractSteamGuardCode finds the code in plain text and in an HTML cell", (
   assert.equal(utils.extractSteamGuardCode("Hello, nothing to see here"), null);
 });
 
+test("extractSteamGuardCode finds a letters-only code in its own HTML cell", () => {
+  assert.equal(utils.extractSteamGuardCode("<td>Your Steam Guard code is:</td>\n<td>KDNJM</td>"), "KDNJM");
+  assert.equal(utils.extractSteamGuardCode("<p>Steam Guard code</p><p style=\"x\">KDNJM</p>"), "KDNJM");
+  assert.equal(utils.extractSteamGuardCode("Steam Guard code\nSTEAM\n"), null);
+});
+
 test("mailText decodes base64 body lines next to the raw text", () => {
   const encoded = Buffer.from("Your Steam Guard code is: Q9WRT").toString("base64");
   const text = utils.mailText(`Subject: x\n\n${encoded}\n`);

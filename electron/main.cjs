@@ -850,7 +850,7 @@ function takePendingPassword(pendingId) {
 const indexPath = path.join(__dirname, "..", "dist", "renderer", "index.html");
 const MAIN_WIDTH = 1100;
 const MAIN_HEIGHT = 880;
-const PANEL_WIDTH = 380;
+const PANEL_WIDTH = 440;
 // The panel sits flush against the main window; its left border is the divider.
 const PANEL_GAP = 0;
 // Length of the fade-out when a window closes.
@@ -1049,6 +1049,13 @@ function registerWindowControls() {
   ipcMain.handle("window:reveal", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win && !win.isDestroyed()) win.show();
+  });
+  // Moves the main window by an offset in pixels. Its move event places the attached windows.
+  ipcMain.handle("window:moveGroup", (_event, dx, dy) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    const bounds = mainWindow.getBounds();
+    mainWindow.setPosition(Math.round(bounds.x + dx), Math.round(bounds.y + dy));
   });
   ipcMain.handle("window:minimize", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

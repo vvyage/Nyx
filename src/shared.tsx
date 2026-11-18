@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Account, DisplayStatus, LoginStart, UpdateStatus } from "./types";
 import { formatDuration } from "./status";
 import logo from "./assets/logo.png";
@@ -37,6 +38,7 @@ export function Frame({
   minimizable = true,
   closable = true,
   showVersion = false,
+  groupDrag = false,
 }: {
   children: ReactNode;
   title?: string;
@@ -44,9 +46,36 @@ export function Frame({
   minimizable?: boolean;
   closable?: boolean;
   showVersion?: boolean;
+  // Dragging the title bar moves the main window, and with it every attached window.
+  groupDrag?: boolean;
 }) {
   const windowRef = useRef<HTMLDivElement>(null);
   const [version, setVersion] = useState<string | null>(null);
+  const dragPoint = useRef<{ x: number; y: number } | null>(null);
+
+  // Group drag: sends the pointer movement to the main process, which moves the main window.
+  // The attached windows follow through its move event.
+  function onGroupPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragPoint.current = { x: event.screenX, y: event.screenY };
+  }
+  function onGroupPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const last = dragPoint.current;
+    if (!last) return;
+    // Whole pixels; the remainder stays in the anchor so the drag does not drift.
+    const dx = Math.round(event.screenX - last.x);
+    const dy = Math.round(event.screenY - last.y);
+    if (dx === 0 && dy === 0) return;
+    dragPoint.current = { x: last.x + dx, y: last.y + dy };
+    window.sah.moveWindowGroup(dx, dy).catch(() => undefined);
+  }
+  function onGroupPointerUp(event: ReactPointerEvent<HTMLElement>) {
+    dragPoint.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
 
   useEffect(() => {
     if (!showVersion) return;
@@ -74,7 +103,13 @@ export function Frame({
 
   return (
     <div className="window" ref={windowRef}>
-      <header className={draggable ? "titlebar" : "titlebar locked"}>
+      <header
+        className={groupDrag ? "titlebar group-drag" : draggable ? "titlebar" : "titlebar locked"}
+        onPointerDown={groupDrag ? onGroupPointerDown : undefined}
+        onPointerMove={groupDrag ? onGroupPointerMove : undefined}
+        onPointerUp={groupDrag ? onGroupPointerUp : undefined}
+        onPointerCancel={groupDrag ? onGroupPointerUp : undefined}
+      >
         <div className="titlebar-brand">
           <img className="titlebar-logo" src={logo} alt="" />
           <span>{title}</span>

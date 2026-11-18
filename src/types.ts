@@ -210,6 +210,7 @@ export interface SahApi {
   minimizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
   revealWindow(): Promise<void>;
+  moveWindowGroup(dx: number, dy: number): Promise<void>;
   openPanel(id: string): Promise<void>;
   closePanel(): Promise<void>;
   onPanelSelect(callback: (id: string) => void): () => void;

@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld("sah", {
   closeWindow: () => ipcRenderer.invoke("window:close"),
   // Shows the window once it has mounted. Resolves when the call is handled.
   revealWindow: () => ipcRenderer.invoke("window:reveal"),
+  // Moves the main window by a pixel offset; the attached windows follow it.
+  moveWindowGroup: (dx, dy) => ipcRenderer.invoke("window:moveGroup", dx, dy),
   // Opens (or re-targets) the attached account panel window.
   openPanel: (id) => ipcRenderer.invoke("panel:open", id),
   // Hides the attached account panel with its fade-out.

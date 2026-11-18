@@ -77,6 +77,13 @@ function decodeQuotedPrintable(text) {
     .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+// A 5-character Steam code on a line of its own. Many codes are letters only (for example
+// KDNJM), so a digit is not required. Codes avoid vowels, which keeps ordinary words such as
+// STEAM or GUARD from matching.
+function looksLikeGuardCode(line) {
+  return /^[A-Z0-9]{5}$/.test(line) && (/\d/.test(line) || !/[AEIOU]/.test(line));
+}
+
 // Reads the 5-character Steam Guard code from a sign-in email. HTML tags become line breaks
 // first, so a code in its own table cell is found too.
 function extractSteamGuardCode(raw) {
@@ -90,7 +97,7 @@ function extractSteamGuardCode(raw) {
   // A code alone on the line after a "code" line, as in an HTML cell.
   for (let i = 0; i < lines.length - 1; i++) {
     const next = lines[i + 1];
-    if (/[Cc]ode|[Vv]erification/.test(lines[i]) && /^[A-Z0-9]{5}$/.test(next) && /\d/.test(next)) return next;
+    if (/[Cc]ode|[Vv]erification/.test(lines[i]) && looksLikeGuardCode(next)) return next;
   }
   return null;
 }

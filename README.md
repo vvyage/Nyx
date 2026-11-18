@@ -26,7 +26,7 @@ live in `%APPDATA%\steam-account-helper\`.
 - **Create tab (assisted signup):** generates a username and password, opens
   Steam's join page, and watches your mailbox for Steam's confirmation link.
   - Gmail requires an app password (2-Step Verification must be on).
-  - "App window" mode is the default. "Default browser" is the fallback.
+  - "Pop-Up Window" mode is the default. "In-Browser" is the fallback.
   - Mail credentials are typed each time and never stored.
 
 ## Build from source (developers)

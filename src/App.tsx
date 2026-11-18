@@ -20,7 +20,7 @@ const SIGNING_IN_MESSAGE = "Signing in to Steam. This can take up to a minute.";
 export function App() {
   if (panelId) {
     return (
-      <Frame title="Account" draggable={false} minimizable={false} closable={false}>
+      <Frame title="Account" groupDrag minimizable={false} closable={false}>
         <AccountWindow initialId={panelId} />
       </Frame>
     );
@@ -287,6 +287,15 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     setSignupMessage(null);
   }
 
+  async function copySignupValue(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`${what} copied.`);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
   // Editing the email hides the mail server fields until the field loses focus again.
   function changeSignupEmail(value: string) {
     setSignupEmail(value);
@@ -331,7 +340,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setSignup(creds);
       setSignupUser(creds.username);
       setSignupPass(creds.password);
-      setSignupMessage("Opening Steam's signup page...");
       if (saveMailChoice && signupMailPassword) {
         const mail = {
           host: signupHost,
@@ -582,13 +590,33 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               <span>{signingIn}</span>
             </div>
           )}
-          <div className="tabs">
-            <button className={addTab === "login" ? "tab active" : "tab"} onClick={() => setAddTab("login")}>
-              Sign in
-            </button>
-            <button className={addTab === "create" ? "tab active" : "tab"} onClick={() => setAddTab("create")}>
-              Create
-            </button>
+          <div className="add-head">
+            <div className="tabs">
+              <button className={addTab === "login" ? "tab active" : "tab"} onClick={() => setAddTab("login")}>
+                Sign in
+              </button>
+              <button className={addTab === "create" ? "tab active" : "tab"} onClick={() => setAddTab("create")}>
+                Create
+              </button>
+            </div>
+            {addTab === "create" && !newLoginGuard && !signup && (
+              <div className="seg" role="group" aria-label="Signup window">
+                <button
+                  className={signupMode === "browser" ? "on" : ""}
+                  aria-pressed={signupMode === "browser"}
+                  onClick={() => setSignupMode("browser")}
+                >
+                  In-Browser
+                </button>
+                <button
+                  className={signupMode === "embedded" ? "on" : ""}
+                  aria-pressed={signupMode === "embedded"}
+                  onClick={() => setSignupMode("embedded")}
+                >
+                  Pop-Up Window
+                </button>
+              </div>
+            )}
           </div>
 
           {newLoginGuard ? (
@@ -615,6 +643,15 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  <button
+                    className="ghost icon-only"
+                    title="Copy account name"
+                    aria-label="Copy account name"
+                    disabled={!signupUser}
+                    onClick={() => copySignupValue(signupUser, "Account name")}
+                  >
+                    <Icon name="copy" size={14} />
+                  </button>
                 </div>
                 <div className="row">
                   <input
@@ -624,12 +661,21 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  <button
+                    className="ghost icon-only"
+                    title="Copy password"
+                    aria-label="Copy password"
+                    disabled={!signupPass}
+                    onClick={() => copySignupValue(signupPass, "Password")}
+                  >
+                    <Icon name="copy" size={14} />
+                  </button>
                 </div>
-                <p className="muted small">{signupMessage ?? "Working..."}</p>
+                {signupMessage && <p className="warn-text small">{signupMessage}</p>}
                 <div className="row">
                   <button onClick={finishSignup} disabled={busy || !signupUser.trim() || !signupPass}>
-                    <Icon name="check" />
-                    Account created, sign in
+                    <Icon name="logIn" />
+                    Sign in now
                   </button>
                   <button className="ghost" onClick={cancelSignup} disabled={busy}>
                     Cancel signup
@@ -638,22 +684,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               </>
             ) : (
               <>
-                <div className="tabs">
-                  <button
-                    className={signupMode === "browser" ? "tab active" : "tab"}
-                    onClick={() => setSignupMode("browser")}
-                    disabled={!!signup}
-                  >
-                    Default browser
-                  </button>
-                  <button
-                    className={signupMode === "embedded" ? "tab active" : "tab"}
-                    onClick={() => setSignupMode("embedded")}
-                    disabled={!!signup}
-                  >
-                    App window
-                  </button>
-                </div>
                 <div className="row">
                   <input
                     type="email"
@@ -703,35 +733,43 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                       !signupMailUser.trim() ||
                       (!signupMailPassword && !savedMail)
                     }
+                    title="Makes a login, opens Steam's signup, and reads the confirmation email from your mailbox"
                     onClick={openSignup}
                   >
                     <Icon name="userPlus" />
                     Open signup
                   </button>
                 </div>
-                {signupEmailDone && signupKnownPreset?.id === "gmail" && (
-                  <p className="muted small">
-                    Gmail requires an app password (16 characters, needs 2-Step Verification on the account), not your normal Google password.
-                  </p>
-                )}
-                <div className="row">
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={saveMailChoice}
-                      onChange={(e) => setSaveMailChoice(e.target.checked)}
-                    />
-                    Save this mailbox login in the vault (encrypted)
-                  </label>
+                <div className="add-foot">
+                  {savedMail ? (
+                    <span className="chip" title={`Mailbox ${savedMail.email}. The password comes from the vault.`}>
+                      <Icon name="key" size={12} />
+                      Saved mailbox
+                    </span>
+                  ) : (
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={saveMailChoice}
+                        onChange={(e) => setSaveMailChoice(e.target.checked)}
+                      />
+                      Save mailbox in vault
+                    </label>
+                  )}
+                  {signupEmailDone && signupKnownPreset?.id === "gmail" && (
+                    <span
+                      className="muted"
+                      title="Gmail needs a 16-character app password (2-Step Verification must be on), not your Google password"
+                    >
+                      Gmail: app password
+                    </span>
+                  )}
                   {savedMail && (
                     <button className="ghost small" onClick={forgetMail} disabled={busy}>
-                      Forget saved mailbox
+                      Forget
                     </button>
                   )}
                 </div>
-                {savedMail && (
-                  <p className="muted small">Using the saved mailbox {savedMail.email}. The password comes from the vault.</p>
-                )}
               </>
             )
           ) : (
@@ -744,7 +782,8 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               />
               <input
                 type="password"
-                placeholder="Password (not stored)"
+                placeholder="Password"
+                title="Not stored. Only a refresh token is kept in the encrypted vault."
                 value={newLoginPassword}
                 onChange={(e) => setNewLoginPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && newLoginName.trim() && newLoginPassword && addWithLogin()}
@@ -756,11 +795,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               </button>
             </div>
           )}
-          <p className="muted small">
-            {addTab === "create"
-              ? "Generates a username and password, opens Steam's signup page, and watches your mailbox for Steam's confirmation email, then opens its link. You fill the form, solve the CAPTCHA, and choose to create a new account."
-              : "The password is not stored. Only a refresh token is kept in the encrypted vault."}
-          </p>
         </section>
       )}
 

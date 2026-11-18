@@ -6,7 +6,8 @@
 // Two modes:
 //   - "browser": the join page and the confirmation link open in the user's default browser.
 //   - "embedded": both open in an app window. hCaptcha has rejected this window in the past.
-//     The app fills empty fields on the join page with the generated values, best effort.
+//     The app fills the email and account name on the join page, best effort. The password is
+//     copied and pasted by the user.
 //
 // The app never solves CAPTCHAs or calls Steam's signup endpoints. Credentials live in memory
 // only and are cleared when the signup is completed, cancelled, or times out. The credentials
@@ -77,16 +78,16 @@ function blurScript(key) {
   })()`;
 }
 
-// Order matters: the confirm fields repeat the value above them.
-const FILL_ORDER = ["email", "emailConfirm", "accountName", "password", "passwordConfirm"];
+// Order matters: the confirm field repeats the value above it. Passwords are not filled: the
+// user copies them from the signup window and pastes them into Steam's form (auto-filling the
+// password was unreliable, and Steam's form rejected it).
+const FILL_ORDER = ["email", "emailConfirm", "accountName"];
 
 function valuesFor(session) {
   return {
     email: session.email,
     emailConfirm: session.email,
     accountName: session.username,
-    password: session.password,
-    passwordConfirm: session.password,
   };
 }
 
@@ -111,7 +112,7 @@ async function open(input) {
     mail,
     username: utils.generateUsername(),
     password: utils.generatePassword(),
-    message: "Opening Steam's signup page...",
+    message: null,
     since: Date.now() - MAIL_LOOKBACK_MS,
     watching: false,
     win: null,
@@ -134,10 +135,6 @@ async function open(input) {
     reset();
     throw new Error(`Could not open Steam's signup page: ${error.message}`);
   }
-  setMessage(
-    session,
-    "Fill in the form and submit it. Waiting for Steam's confirmation email in your mailbox...",
-  );
   watchForConfirmation(session);
   return credentials;
 }
@@ -221,12 +218,8 @@ async function watchForConfirmation(session) {
       if (active !== session) return;
       if (link) {
         await openLink(session, link);
-        setMessage(
-          session,
-          session.mode === "embedded"
-            ? "Opened Steam's confirmation link in a separate window. Go back to the signup window, choose to create a new account, then check the name and password below."
-            : "Opened Steam's confirmation link. On Steam's page, choose to create a new account, then check the name and password below.",
-        );
+        // Success needs no message: the window shows only problems.
+        setMessage(session, null);
         return;
       }
       await sleep(MAIL_POLL_MS);

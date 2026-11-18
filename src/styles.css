@@ -136,6 +136,12 @@ textarea {
 .titlebar.locked {
   -webkit-app-region: no-drag;
 }
+/* Attached window title bar: dragged by pointer, moves the whole group (see Frame in shared.tsx) */
+.titlebar.group-drag {
+  -webkit-app-region: no-drag;
+  cursor: move;
+  touch-action: none;
+}
 .titlebar-brand {
   display: flex;
   align-items: center;
@@ -478,6 +484,66 @@ textarea {
   color: var(--text);
   background: var(--raised-hover);
 }
+.add-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Segmented switch: signup window type */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+}
+.seg button {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+}
+.seg button:hover:not(:disabled) {
+  color: var(--text);
+  filter: none;
+}
+.seg button.on {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+/* Footer row under the mailbox fields: one line of status and actions */
+.add-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  font-size: 12px;
+}
+.add-foot .check {
+  font-size: 12px;
+}
+.add-foot > button {
+  margin-left: auto;
+}
+/* Square icon button, e.g. copy next to a generated value */
+button.icon-only {
+  padding: 7px 9px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.14);
+  color: var(--accent);
+  font-size: 12px;
+}
 .row {
   display: flex;
   gap: 8px;
@@ -712,10 +778,24 @@ textarea {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 14px;
   border-left: 1px solid var(--line);
   background: rgba(11, 13, 19, 0.6);
+  overflow-x: hidden;
+}
+/* Rows wrap instead of pushing buttons past the panel edge */
+.panel .row {
+  flex-wrap: wrap;
+}
+.panel .row code {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.panel .sec {
+  padding: 10px 12px;
+  gap: 6px;
 }
 /* Notices float over the top of the panel. In the flow they pushed the sections down and
    added a scrollbar to the panel. */
@@ -805,16 +885,19 @@ textarea {
 }
 .panel-footer {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
   padding-top: 4px;
 }
 .panel-footer button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 7px 8px;
 }
 
 /* Form controls */
