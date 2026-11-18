@@ -10,7 +10,6 @@ contextBridge.exposeInMainWorld("sah", {
   clearCooldown: (id) => ipcRenderer.invoke("accounts:clearCooldown", id),
   refreshCooldown: (id) => ipcRenderer.invoke("accounts:refreshOne", id),
   refreshAllCooldowns: () => ipcRenderer.invoke("accounts:refreshAll"),
-  webSignIn: (id) => ipcRenderer.invoke("accounts:webSignIn", id),
   signIn: (steamId64) => ipcRenderer.invoke("steam:signIn", steamId64),
   vaultStatus: () => ipcRenderer.invoke("vault:status"),
   vaultSetup: (password) => ipcRenderer.invoke("vault:setup", password),

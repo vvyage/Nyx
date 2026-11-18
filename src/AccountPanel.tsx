@@ -145,21 +145,6 @@ function AccountPanel({
     if (await run(() => window.sah.refreshCooldown(account.id))) setNotice("Cooldown checked.");
   }
 
-  async function webSignIn() {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await window.sah.webSignIn(account.id);
-      onAccounts(result.accounts);
-      setNotice(result.message);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function saveManual() {
     const iso = localInputToIso(manualValue);
     if (!iso) {
@@ -378,24 +363,6 @@ function AccountPanel({
         )}
       </Section>
 
-      <Section icon="globe" title="Web session">
-        <p className="muted small">
-          {account.webSignedIn
-            ? "Web session saved. Cooldowns are read automatically."
-            : "Optional fallback: sign in through Steam's web login in a window."}
-        </p>
-        <div className="row">
-          <button onClick={webSignIn} disabled={busy}>
-            <Icon name="globe" />
-            {account.webSignedIn ? "Re-sign in" : "Sign in (web)"}
-          </button>
-          <button className="ghost" disabled={busy || !account.webSignedIn} onClick={refreshOne}>
-            <Icon name="refresh" />
-            Check now
-          </button>
-        </div>
-      </Section>
-
       <Section icon="calendar" title="Manual end">
         <div className="row">
           <input type="datetime-local" value={manualValue} onChange={(e) => setManualValue(e.target.value)} />
@@ -406,6 +373,10 @@ function AccountPanel({
       </Section>
 
       <div className="panel-footer">
+        <button className="ghost" disabled={busy || !account.loginSaved} onClick={refreshOne} title={account.loginSaved ? undefined : "Save a login first"}>
+          <Icon name="refresh" />
+          Check now
+        </button>
         <button className="ghost" disabled={busy} onClick={() => run(() => window.sah.clearCooldown(account.id))}>
           <Icon name="rotateCcw" />
           Clear cooldown

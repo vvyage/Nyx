@@ -188,7 +188,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
 
   async function refreshAll() {
     if (await run(() => window.sah.refreshAllCooldowns())) {
-      setNotice("Cooldowns refreshed for accounts with a web session.");
+      setNotice("Cooldowns refreshed for accounts with a saved login.");
     }
   }
 
@@ -803,12 +803,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   label="Login"
                   state={account.loginSaved ? "on" : "off"}
                   title={account.loginSaved ? "Saved login in the vault" : "No saved login"}
-                />
-                <Badge
-                  icon="globe"
-                  label="Web"
-                  state={account.webSignedIn ? "on" : "off"}
-                  title={account.webSignedIn ? "Web session saved" : "No web session"}
                 />
                 <button
                   className="ghost small"

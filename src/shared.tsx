@@ -204,7 +204,7 @@ export function Count({
   );
 }
 
-// Small status chip on a card: Steam, saved login, web session.
+// Small status chip on a card: Steam, saved login.
 export function Badge({
   icon,
   label,

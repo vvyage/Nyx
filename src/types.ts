@@ -27,8 +27,6 @@ export interface Account {
   displayName: string;
   // Present when Steam lists this account on this machine.
   steam: SteamInfo | null;
-  // True when this account's Steam web session is saved in the app.
-  webSignedIn: boolean;
   // True when Steam is running and currently signed in as this account.
   steamSignedIn: boolean;
   // True when a refresh token for this account is stored in the encrypted vault.
@@ -167,7 +165,6 @@ export interface SahApi {
   clearCooldown(id: string): Promise<Account[]>;
   refreshCooldown(id: string): Promise<Account[]>;
   refreshAllCooldowns(): Promise<Account[]>;
-  webSignIn(id: string): Promise<{ message: string; accounts: Account[] }>;
   signIn(steamId64: string): Promise<{ message: string }>;
   vaultStatus(): Promise<VaultStatus>;
   vaultSetup(password: string): Promise<{ recoveryCode: string; status: VaultStatus }>;

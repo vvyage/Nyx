@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, Notification, screen } = require("ele
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const { execFileSync } = require("node:child_process");
 const steamClient = require("./steamClient.cjs");
 const cooldownFetcher = require("./cooldownFetcher.cjs");
 const steamAuth = require("./steamAuth.cjs");
@@ -138,7 +139,6 @@ async function viewAccounts(accounts) {
               rememberPassword: steam.rememberPassword,
             }
           : null,
-        webSignedIn: await cooldownFetcher.isWebSignedIn(account.steamId64),
         // True when a refresh token for this account is stored in the vault.
         loginSaved: account.tokenSaved === true,
         // True when a password is stored in the vault. Accounts saved before passwords were
@@ -280,32 +280,18 @@ async function prepareSavedLogin(account) {
   }
 }
 
-// Results that mean the persisted web session was not accepted. Only these trigger a
-// saved-login sign-in, so a working session is not replaced on every refresh.
-function needsSavedLogin(result) {
-  return (
-    result.status === "unknown" &&
-    /^(Steam showed the profile page|Steam web session expired)/.test(result.reason)
-  );
-}
-
-// Reads one account. First tries the persisted web session as-is. Only when that is
-// missing or rejected does it apply the saved login. Returns null when an automatic run
-// should skip the account quietly (vault locked); a manual run gets the reason.
+// Reads one account: applies its saved login, then reads the matchmaking page. Accounts
+// without a saved login cannot be read. Returns null when an automatic run should skip the
+// account quietly (vault locked); a manual run gets the reason.
 // step(text) reports each stage to the progress panel.
 async function readAccountCooldown(account, manual, step = () => {}) {
-  if (await cooldownFetcher.isWebSignedIn(account.steamId64)) {
-    step("reading the matchmaking page with the saved web session");
-    const current = await cooldownFetcher.readCooldownPage(account.steamId64);
-    if (!account.tokenSaved || !needsSavedLogin(current)) return current;
-    step("the web session was not accepted");
+  if (!account.tokenSaved) {
+    return manual ? { status: "unknown", expiresAt: null, reason: "No saved login. Save the login first." } : null;
   }
-  if (account.tokenSaved) {
-    step("applying the saved login");
-    const failure = await prepareSavedLogin(account);
-    if (failure) {
-      return manual ? { status: "unknown", expiresAt: null, reason: failure } : null;
-    }
+  step("applying the saved login");
+  const failure = await prepareSavedLogin(account);
+  if (failure) {
+    return manual ? { status: "unknown", expiresAt: null, reason: failure } : null;
   }
   step("reading the matchmaking page");
   return cooldownFetcher.readCooldownPage(account.steamId64);
@@ -340,7 +326,7 @@ function addProgressLog(text) {
   setRefreshProgress({ log: [...refreshProgress.log, `${time}  ${text}`].slice(-PROGRESS_LOG_LIMIT) });
 }
 
-// Reads the matchmaking page for every account with a saved login or web session, one
+// Reads the matchmaking page for every account with a saved login, one
 // at a time. Runs are serialized so the auto timer and a manual click never overlap.
 function refreshCooldowns(onlyId = null) {
   if (syncRunning) return Promise.reject(new Error("Wait for the Steam sync to finish."));
@@ -350,10 +336,8 @@ function refreshCooldowns(onlyId = null) {
     const targets = [];
     for (const account of loadAccounts()) {
       if (onlyId && account.id !== onlyId) continue;
-      const signedIn = await cooldownFetcher.isWebSignedIn(account.steamId64);
-      // Automatic runs skip accounts with neither a saved login nor a web session;
-      // a manual check reports why.
-      if (!signedIn && !account.tokenSaved && !onlyId) continue;
+      // Automatic runs skip accounts without a saved login; a manual check reports why.
+      if (!account.tokenSaved && !onlyId) continue;
       targets.push(account);
     }
     setRefreshProgress({
@@ -362,7 +346,7 @@ function refreshCooldowns(onlyId = null) {
       done: 0,
       total: targets.length,
       currentName: null,
-      phase: targets.length ? "Starting" : "No accounts have a saved login or web session",
+      phase: targets.length ? "Starting" : "No accounts have a saved login",
       log: [],
     });
 
@@ -497,9 +481,15 @@ function registerIpc() {
       }
       tokenVault().removeToken(removed.steamId64);
     }
-    if (removed) cs2Config.removeStore(cs2StorePath(), removed.steamId64);
+    if (removed) {
+      cs2Config.removeStore(cs2StorePath(), removed.steamId64);
+      // Drops the account's Steam cookies from the app's session storage.
+      await cooldownFetcher.forgetSession(removed.steamId64).catch(() => {});
+    }
     const remaining = accounts.filter((item) => item.id !== id);
     saveAccounts(remaining);
+    // The removal may come from the panel window; the main window must drop the card too.
+    notifyRenderer();
     return respond(remaining);
   });
 
@@ -659,17 +649,10 @@ function registerIpc() {
     return respond(loadAccounts());
   });
 
-  // Reads the page for every account that has a web session.
+  // Reads the page for every account that has a saved login.
   ipcMain.handle("accounts:refreshAll", async () => {
     await refreshCooldowns();
     return respond(loadAccounts());
-  });
-
-  // Opens Steam's web login for one account, then reports whether it was saved.
-  ipcMain.handle("accounts:webSignIn", async (_event, id) => {
-    const account = requireAccount(loadAccounts(), id);
-    const result = await cooldownFetcher.signInWeb(account.steamId64);
-    return { message: result.message, accounts: await respond(loadAccounts()) };
   });
 
   // Manual fallback: the renderer sends an absolute UTC ISO string.
@@ -787,11 +770,17 @@ function registerIpc() {
   // User preferences (notifications). Only known boolean keys are accepted.
   ipcMain.handle("settings:get", () => settingsStore.loadSettings(settingsPath()));
   ipcMain.handle("settings:save", (_event, change) => {
+    const before = settingsStore.loadSettings(settingsPath());
     const safe = {};
     for (const key of Object.keys(settingsStore.DEFAULTS)) {
       if (change && typeof change[key] === "boolean") safe[key] = change[key];
     }
-    return settingsStore.saveSettings(settingsPath(), safe);
+    const saved = settingsStore.saveSettings(settingsPath(), safe);
+    // Confirms when a notification type is switched on, so the user can see it works.
+    if (Object.keys(settingsStore.DEFAULTS).some((key) => safe[key] === true && !before[key])) {
+      notify("Notifications are now active", "Nyx will show a Windows notice for the alerts you have turned on.");
+    }
+    return saved;
   });
 
   ipcMain.handle("app:version", () => app.getVersion());
@@ -1095,6 +1084,22 @@ function registerWindowControls() {
 // Windows groups notifications under this id. It matches the installer's appId so
 // notifications from the installed app and from `npm start` are attributed the same way.
 app.setAppUserModelId("local.steamaccounthelper");
+
+// In dev (`npm start`) Windows has no installed shortcut for this AUMID, so toasts show
+// "Electron" and its logo. Registering a display name and icon for the AUMID in HKCU fixes
+// that. Packaged builds get the name and icon from the installer's Start menu shortcut.
+function registerNotificationIdentity() {
+  if (process.platform !== "win32" || app.isPackaged) return;
+  const key = "HKCU\\Software\\Classes\\AppUserModelId\\local.steamaccounthelper";
+  const icon = path.resolve(iconPath);
+  try {
+    execFileSync("reg", ["add", key, "/v", "DisplayName", "/t", "REG_SZ", "/d", "Nyx", "/f"], { windowsHide: true });
+    execFileSync("reg", ["add", key, "/v", "IconUri", "/t", "REG_SZ", "/d", icon, "/f"], { windowsHide: true });
+  } catch (error) {
+    console.warn(`[notify] could not register notification identity: ${error.message}`);
+  }
+}
+registerNotificationIdentity();
 
 app.whenReady().then(() => {
   // Removes the File / Edit / View / Window menu bar.
