@@ -14,8 +14,9 @@ function partitionFor(steamId64) {
   return `persist:acct-${steamId64}`;
 }
 
-function gcpdUrl(steamId64) {
-  return `${COMMUNITY}/profiles/${steamId64}/gcpd/730/?tab=matchmaking`;
+// Steam moved the cooldown table between tabs for some accounts, so the tab is a parameter.
+function gcpdUrl(steamId64, tab = "matchmaking") {
+  return `${COMMUNITY}/profiles/${steamId64}/gcpd/730/?tab=${tab}`;
 }
 
 // Returns the account's partition session with a plain Chrome user agent, since the
@@ -76,10 +77,13 @@ function withTimeout(promise, ms, message) {
 async function readCooldownPage(steamId64) {
   // One retry when the table is missing: a page can come back as an interstitial or a
   // partial render, and that should not overwrite a readable result on the first try.
-  const first = await loadAndParse(steamId64);
+  const first = await loadAndParse(steamId64, "matchmaking");
   if (!isMissingTable(first)) return first;
   await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-  return loadAndParse(steamId64);
+  const retry = await loadAndParse(steamId64, "matchmaking");
+  if (!isMissingTable(retry)) return retry;
+  // Some accounts now show the cooldown on the Competitive Matches tab instead.
+  return loadAndParse(steamId64, "matchhistorycompetitive");
 }
 
 const MISSING_TABLE_REASON = "Competitive Cooldown Expiration table not found on the page.";
@@ -90,7 +94,7 @@ function isMissingTable(result) {
 
 // Loads the page once in a hidden window and parses it. Adds the final URL and page
 // title to a missing-table reason so the cause is visible without the page itself.
-async function loadAndParse(steamId64) {
+async function loadAndParse(steamId64, tab) {
   const win = new BrowserWindow({
     show: false,
     width: 1000,
@@ -104,7 +108,7 @@ async function loadAndParse(steamId64) {
     },
   });
   try {
-    await withTimeout(win.loadURL(gcpdUrl(steamId64)), PAGE_TIMEOUT_MS, "Page load timed out.");
+    await withTimeout(win.loadURL(gcpdUrl(steamId64, tab)), PAGE_TIMEOUT_MS, "Page load timed out.");
     const finalUrl = win.webContents.getURL();
     if (/steamcommunity\.com\/(login|openid)/i.test(finalUrl)) {
       return {
@@ -115,7 +119,7 @@ async function loadAndParse(steamId64) {
     }
     // Steam serves the profile page instead of the matchmaking page when the login is not
     // accepted for this account's personal data. That is not a parser problem.
-    if (!/\/gcpd\/730\//.test(new URL(finalUrl).pathname)) {
+    if (!/\/gcpd\/730(\/|$)/.test(new URL(finalUrl).pathname)) {
       return {
         status: "unknown",
         expiresAt: null,

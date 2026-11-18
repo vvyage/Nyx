@@ -76,17 +76,20 @@ function createTokenVault(filePath) {
       return record ? record.refreshToken : null;
     },
 
-    // Saves the refresh token. A password, when given, is saved with it. Without one, the
-    // password already stored for the account is kept.
-    saveToken(steamId64, refreshToken, password) {
+    // Saves the refresh token. A password and the Steam login name, when given, are saved with it.
+    // Without them, the values already stored for the account are kept.
+    saveToken(steamId64, refreshToken, password, accountName) {
       const all = records();
       const previous = all.find((item) => item.steamId64 === steamId64);
       const list = all.filter((item) => item.steamId64 !== steamId64);
       const kept = typeof password === "string" ? password : previous ? previous.password : undefined;
+      const keptName =
+        typeof accountName === "string" && accountName ? accountName : previous ? previous.accountName : undefined;
       list.push({
         steamId64,
         refreshToken,
         ...(kept !== undefined ? { password: kept } : {}),
+        ...(keptName !== undefined ? { accountName: keptName } : {}),
         savedAt: new Date().toISOString(),
       });
       storeRecords(list);
@@ -95,6 +98,12 @@ function createTokenVault(filePath) {
     getPassword(steamId64) {
       const record = records().find((item) => item.steamId64 === steamId64);
       return record && typeof record.password === "string" ? record.password : null;
+    },
+
+    // The Steam login name saved with the account's login, or null.
+    getAccountName(steamId64) {
+      const record = records().find((item) => item.steamId64 === steamId64);
+      return record && typeof record.accountName === "string" && record.accountName ? record.accountName : null;
     },
 
     removeToken(steamId64) {

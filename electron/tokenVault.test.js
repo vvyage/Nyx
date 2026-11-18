@@ -55,6 +55,23 @@ test("passwords are stored with the token, kept on token update, and removed wit
   }
 });
 
+test("the Steam login name is stored with the token and kept on token update", async () => {
+  const { dir, file } = tempFile();
+  try {
+    const store = createTokenVault(file);
+    await store.setup(PASSWORD);
+    store.saveToken("76561198000000001", "token-a", "pw-one", "sah_login_name");
+    assert.equal(store.getAccountName("76561198000000001"), "sah_login_name");
+    store.saveToken("76561198000000001", "token-a2");
+    assert.equal(store.getAccountName("76561198000000001"), "sah_login_name");
+    assert.equal(store.getAccountName("76561198000000009"), null);
+    store.removeToken("76561198000000001");
+    assert.equal(store.getAccountName("76561198000000001"), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("wrong password is rejected and the vault stays locked", async () => {
   const { dir, file } = tempFile();
   try {

@@ -32,6 +32,8 @@ export interface Account {
   // True when a refresh token for this account is stored in the encrypted vault.
   loginSaved: boolean;
   passwordSaved: boolean;
+  // The Steam login name saved in the vault, or null when none is saved.
+  loginName: string | null;
 }
 
 export interface CooldownProgress {
@@ -156,6 +158,17 @@ export interface Cs2Binding {
   command: string;
 }
 
+// Tabs of the CS2 window.
+export type Cs2TabId = "video" | "crosshair" | "mouse" | "keybinds";
+
+// Changes sent to the main process. Each group maps a setting name (or key name for bindings)
+// to its new value.
+export interface Cs2Changes {
+  video?: Record<string, string>;
+  convars?: Record<string, string>;
+  bindings?: Record<string, string>;
+}
+
 export interface SahApi {
   listAccounts(): Promise<Account[]>;
   addAccount(input: { steamId64: string }): Promise<Account[]>;
@@ -188,11 +201,16 @@ export interface SahApi {
   cs2SaveSettings(
     id: string,
     snapshotId: string,
-    changes: { video?: Record<string, string>; convars?: Record<string, string> },
+    changes: Cs2Changes,
   ): Promise<{ state: Cs2State; snapshotId: string }>;
-  cs2Open(id: string): Promise<void>;
+  cs2ApplyToSteam(
+    id: string,
+    changes: Cs2Changes,
+  ): Promise<{ state: Cs2State; backupId: string | null; changedCount: number }>;
+  cs2Open(id: string, tab?: Cs2TabId): Promise<void>;
   cs2Close(): Promise<void>;
   onCs2Select(callback: (id: string) => void): () => void;
+  onCs2Tab(callback: (tab: Cs2TabId) => void): () => void;
   getSettings(): Promise<AppSettings>;
   saveSettings(change: Partial<AppSettings>): Promise<AppSettings>;
   getMailSettings(): Promise<SavedMail | null>;
@@ -205,11 +223,13 @@ export interface SahApi {
   installUpdate(): Promise<{ ok: true }>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onAccountsChanged(callback: (accounts: Account[]) => void): () => void;
+  onNotice(callback: (text: string) => void): () => void;
   getCooldownProgress(): Promise<CooldownProgress>;
   onCooldownProgress(callback: (progress: CooldownProgress) => void): () => void;
   minimizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
   revealWindow(): Promise<void>;
+  setMainBoxed(boxed: boolean): Promise<void>;
   moveWindowGroup(dx: number, dy: number): Promise<void>;
   openPanel(id: string): Promise<void>;
   closePanel(): Promise<void>;

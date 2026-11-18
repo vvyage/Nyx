@@ -1,11 +1,11 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { Account, AppSettings, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
+import type { Account, AppSettings, Cs2TabId, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
 import { presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
 import { AccountWindow } from "./AccountPanel";
-import { Cs2Window } from "./Cs2Window";
-import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock } from "./shared";
+import { Cs2Window, cs2TabFrom } from "./Cs2Window";
+import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock, useCooldownClock } from "./shared";
 import { Icon } from "./Icon";
 
 // The same bundle serves the main window, the attached account panel (?panel=<id>), and the
@@ -20,38 +20,61 @@ const SIGNING_IN_MESSAGE = "Signing in to Steam. This can take up to a minute.";
 export function App() {
   if (panelId) {
     return (
-      <Frame title="Account" groupDrag minimizable={false} closable={false}>
+      <Frame title="Account" groupDrag minimizable={false}>
         <AccountWindow initialId={panelId} />
       </Frame>
     );
   }
   if (cs2Id) {
     return (
-      <Frame title="CS2 settings" draggable={false} minimizable={false}>
-        <Cs2Window initialId={cs2Id} />
+      <Frame title="CS2 settings">
+        <Cs2Window initialId={cs2Id} initialTab={cs2TabFrom(params.get("tab"))} />
       </Frame>
     );
   }
   return <MainApp />;
 }
 
+// Time for the frame to grow from the vault box to the full window. Matches the .window transition.
+const GROW_MS = 320;
+
 // Shows the vault setup or unlock screen until the vault is open, then the dashboard.
+// The vault screens are a centred box. Unlocking grows the box to the full window (CSS transition),
+// then the dashboard replaces the vault screen.
 function MainApp() {
   const [vault, setVault] = useState<VaultStatus | null>(null);
+  // False while the vault screens are shown as a box. Set on unlock to start the grow.
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     window.sah.vaultStatus().then(setVault).catch(() => setVault({ exists: true, unlocked: false }));
   }, []);
 
-  if (!vault) return <Frame showVersion><div className="gate" /></Frame>;
-  if (!vault.exists) return <Frame showVersion><VaultSetup onDone={setVault} /></Frame>;
-  if (!vault.unlocked) return <Frame showVersion><VaultUnlock onDone={setVault} /></Frame>;
+  function onVaultOpened(status: VaultStatus) {
+    if (!status.unlocked) return setVault(status);
+    // The window grows to dashboard size at once; the box stays centred and CSS grows it to fill.
+    window.sah.setMainBoxed(false).catch(() => undefined);
+    setExpanded(true);
+    window.setTimeout(() => setVault(status), GROW_MS);
+  }
+
+  if (!vault) return <Frame showVersion boxed><div className="gate" /></Frame>;
+  if (!vault.exists) {
+    return (
+      <Frame showVersion boxed={!expanded}>
+        <VaultSetup onDone={onVaultOpened} />
+      </Frame>
+    );
+  }
+  if (!vault.unlocked) {
+    return (
+      <Frame showVersion boxed={!expanded}>
+        <VaultUnlock onDone={onVaultOpened} />
+      </Frame>
+    );
+  }
   return (
     <Frame showVersion>
-      <Dashboard
-        onLock={async () => {
-          setVault(await window.sah.vaultLock());
-        }}
-      />
+      <Dashboard />
     </Frame>
   );
 }
@@ -62,14 +85,16 @@ function rank(status: ReturnType<typeof displayStatus>): number {
   return 2;
 }
 
-function Dashboard({ onLock }: { onLock: () => void }) {
+function Dashboard() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [now, setNow] = useState(() => new Date());
+  const now = useCooldownClock(accounts);
   // The account whose panel is open in the attached window.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The card whose CS2 options menu is open, or null.
+  const [cs2MenuId, setCs2MenuId] = useState<string | null>(null);
   // Add-account card: closed by default, with a sign-in tab and a create tab.
   const [addOpen, setAddOpen] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
@@ -134,17 +159,25 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     const offProgress = window.sah.onCooldownProgress(setProgress);
     // Closing the panel window clears the selection.
     const offPanelClosed = window.sah.onPanelClosed(() => setSelectedId(null));
+    // Results of background tasks, such as the CS2 license request after a signup.
+    const offNotice = window.sah.onNotice((text) => setNotice(text));
     return () => {
       offAccounts();
       offProgress();
       offPanelClosed();
+      offNotice();
     };
   }, []);
 
+  // Closes the CS2 options menu on a click outside it.
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+    if (!cs2MenuId) return;
+    const close = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement).closest(".cs2-menu-wrap")) setCs2MenuId(null);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [cs2MenuId]);
 
   const rows = useMemo(
     () =>
@@ -201,6 +234,26 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
     setSelectedId(id);
     window.sah.openPanel(id).catch((e) => setError(errorText(e)));
+  }
+
+  // Runs one entry of the CS2 options menu. Import reads Steam's files directly; the others open the window.
+  async function cs2Action(id: string, action: Cs2TabId | "import") {
+    setCs2MenuId(null);
+    setError(null);
+    setNotice(null);
+    if (action !== "import") {
+      window.sah.cs2Open(id, action).catch((e) => setError(errorText(e)));
+      return;
+    }
+    setBusy(true);
+    try {
+      await window.sah.cs2Import(id);
+      setNotice("Imported the current CS2 settings from Steam.");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function signIn(account: Account) {
@@ -438,16 +491,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
-  async function lockVault() {
-    setBusy(true);
-    try {
-      await window.sah.vaultLock();
-      onLock();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const refreshing = progress.running && progress.kind === "refresh";
   const syncing = progress.running && progress.kind === "sync";
   const checkingLabel = `Checking ${progress.done} of ${progress.total}`;
@@ -472,7 +515,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
         <div className="actions">
           <UpdateButton onError={setError} />
           <button
-            className={`icon-btn${notifyOpen ? " active" : ""}`}
+            className={`icon-btn labelled${notifyOpen ? " active" : ""}`}
             title="Notifications"
             aria-label="Notifications"
             onClick={() => {
@@ -481,35 +524,36 @@ function Dashboard({ onLock }: { onLock: () => void }) {
             }}
           >
             <Icon name="bell" />
+            <span>Notifications</span>
           </button>
           <button
-            className={`icon-btn${refreshing ? " spin" : ""}`}
+            className={`icon-btn labelled${refreshing ? " spin" : ""}`}
             title={refreshing ? checkingLabel : "Refresh cooldowns"}
             aria-label="Refresh cooldowns"
             onClick={refreshAll}
             disabled={busy || progress.running}
           >
             <Icon name="refresh" />
+            <span>Refresh cooldowns</span>
           </button>
           <button
-            className={`icon-btn${syncing ? " bob" : ""}`}
+            className={`icon-btn labelled${syncing ? " bob" : ""}`}
             title={syncing ? "Syncing from Steam..." : "Sync from Steam"}
             aria-label="Sync from Steam"
             onClick={syncFromSteam}
             disabled={busy || progress.running}
           >
             <Icon name="download" />
+            <span>Sync from Steam</span>
           </button>
           <button
-            className={`icon-btn${addOpen ? " active" : ""}`}
+            className={`icon-btn labelled${addOpen ? " active" : ""}`}
             title="Add account"
             aria-label="Add account"
             onClick={() => setAddOpen((open) => !open)}
           >
             <Icon name="userPlus" />
-          </button>
-          <button className="icon-btn" title="Lock vault" aria-label="Lock vault" onClick={lockVault} disabled={busy}>
-            <Icon name="lock" />
+            <span>Add account</span>
           </button>
         </div>
       </div>
@@ -800,15 +844,14 @@ function Dashboard({ onLock }: { onLock: () => void }) {
 
       {rows.length === 0 ? (
         <div className="empty">
-          <Icon name="monitor" size={28} />
-          <p>No accounts yet. Use Sync from Steam or add one by SteamID64.</p>
+          <p>No accounts yet. Sync from Steam or add an account.</p>
         </div>
       ) : (
         <div className="grid">
           {rows.map(({ account, status }) => (
             <article
               key={account.id}
-              className={`card ${status.kind} ${account.id === selectedId ? "selected" : ""}`}
+              className={`card ${status.kind}${account.id === selectedId ? " selected" : ""}${cs2MenuId === account.id ? " menu-open" : ""}`}
               onClick={() => openAccount(account.id)}
             >
               <div className="card-head">
@@ -817,7 +860,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   <span className="name">{account.displayName}</span>
                   <span className="sid">{account.steamId64}</span>
                 </div>
-                <Pill status={status} now={now} />
+                <Pill status={status} />
               </div>
               <div className="card-foot">
                 <Badge
@@ -838,17 +881,30 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   state={account.loginSaved ? "on" : "off"}
                   title={account.loginSaved ? "Saved login in the vault" : "No saved login"}
                 />
-                <button
-                  className="ghost small"
-                  title="CS2 settings and backups"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    window.sah.cs2Open(account.id).catch((err) => setError(errorText(err)));
-                  }}
-                >
-                  <Icon name="key" size={13} />
-                  CS2
-                </button>
+                <div className="cs2-menu-wrap" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className={`icon-btn small${cs2MenuId === account.id ? " active" : ""}`}
+                    title="CS2 options"
+                    aria-label="CS2 options"
+                    aria-haspopup="menu"
+                    aria-expanded={cs2MenuId === account.id}
+                    onClick={() => setCs2MenuId(cs2MenuId === account.id ? null : account.id)}
+                  >
+                    <Icon name="settings" size={15} />
+                  </button>
+                  {cs2MenuId === account.id && (
+                    <div className="cs2-menu" role="menu">
+                      <button role="menuitem" onClick={() => cs2Action(account.id, "video")}>
+                        <Icon name="settings" size={13} />
+                        CS2 settings
+                      </button>
+                      <button role="menuitem" onClick={() => cs2Action(account.id, "import")} disabled={busy}>
+                        <Icon name="download" size={13} />
+                        Import from Steam
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   className="ghost small sign-in"
                   disabled={busy || !!signInBlock(account)}

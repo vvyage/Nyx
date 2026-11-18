@@ -30,14 +30,21 @@ contextBridge.exposeInMainWorld("sah", {
   cs2View: (id, snapshotId) => ipcRenderer.invoke("cs2:view", id, snapshotId),
   cs2Settings: (id, snapshotId) => ipcRenderer.invoke("cs2:settings", id, snapshotId),
   cs2SaveSettings: (id, snapshotId, changes) => ipcRenderer.invoke("cs2:saveSettings", id, snapshotId, changes),
+  cs2ApplyToSteam: (id, changes) => ipcRenderer.invoke("cs2:applyToSteam", id, changes),
   // Opens (or re-targets) the CS2 window across the top of the main window.
-  cs2Open: (id) => ipcRenderer.invoke("cs2:open", id),
+  cs2Open: (id, tab) => ipcRenderer.invoke("cs2:open", id, tab),
   cs2Close: () => ipcRenderer.invoke("cs2:close"),
   // Fired in the CS2 window when the main window asks for another account.
   onCs2Select: (callback) => {
     const listener = (_event, id) => callback(id);
     ipcRenderer.on("cs2:select", listener);
     return () => ipcRenderer.removeListener("cs2:select", listener);
+  },
+  // Fired in an already-open CS2 window when the main window asks for another tab.
+  onCs2Tab: (callback) => {
+    const listener = (_event, tab) => callback(tab);
+    ipcRenderer.on("cs2:tab", listener);
+    return () => ipcRenderer.removeListener("cs2:tab", listener);
   },
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (change) => ipcRenderer.invoke("settings:save", change),
@@ -60,6 +67,7 @@ contextBridge.exposeInMainWorld("sah", {
   closeWindow: () => ipcRenderer.invoke("window:close"),
   // Shows the window once it has mounted. Resolves when the call is handled.
   revealWindow: () => ipcRenderer.invoke("window:reveal"),
+  setMainBoxed: (boxed) => ipcRenderer.invoke("window:setMainBoxed", boxed),
   // Moves the main window by a pixel offset; the attached windows follow it.
   moveWindowGroup: (dx, dy) => ipcRenderer.invoke("window:moveGroup", dx, dy),
   // Opens (or re-targets) the attached account panel window.
@@ -77,6 +85,12 @@ contextBridge.exposeInMainWorld("sah", {
     const listener = () => callback();
     ipcRenderer.on("panel:closed", listener);
     return () => ipcRenderer.removeListener("panel:closed", listener);
+  },
+  // Fired when a background task finishes (for example the CS2 license request). Returns an unsubscribe function.
+  onNotice: (callback) => {
+    const listener = (_event, text) => callback(text);
+    ipcRenderer.on("app:notice", listener);
+    return () => ipcRenderer.removeListener("app:notice", listener);
   },
   // Fired as each account read starts and finishes. Returns an unsubscribe function.
   onCooldownProgress: (callback) => {

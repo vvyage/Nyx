@@ -209,8 +209,59 @@ function removeStore(storeRoot, steamId64) {
 }
 
 // Files whose values can be changed in Nyx: video options and convars. Keybinds stay read-only.
-const EDITABLE = { video: "cs2_video.txt", convars: "cs2_user_convars_0_slot0.vcfg" };
+const EDITABLE = {
+  video: "cs2_video.txt",
+  convars: "cs2_user_convars_0_slot0.vcfg",
+  bindings: KEYS_FILE,
+};
 const MAX_VALUE_LENGTH = 200;
+const MAX_KEY_LENGTH = 40;
+
+// Sets, adds, or changes keybinds in the "bindings" block. edits: { key: command }. A key that is
+// not in the file is added at the end of the block. "<unbound>" removes a key's command.
+function applyBindingEdits(text, edits) {
+  const current = new Map(bindingsFromKeys(text).map(({ key, command }) => [key, command]));
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  let out = text;
+  let changed = 0;
+  for (const [key, command] of Object.entries(edits)) {
+    if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LENGTH || /[\s"\\]/.test(key)) {
+      throw new Error(`Invalid key name: ${key}`);
+    }
+    if (typeof command !== "string" || command.length > MAX_VALUE_LENGTH || /[\r\n]/.test(command)) {
+      throw new Error(`Invalid command for ${key}.`);
+    }
+    if (current.get(key) === command) continue;
+    const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const line = new RegExp(`^([ \\t]*)"${escapeRegExp(key)}"([ \\t]+)"(?:[^"\\\\]|\\\\.)*"`, "gm");
+    const count = (out.match(line) || []).length;
+    if (count > 1) throw new Error(`Key ${key} was found ${count} times; it was not changed.`);
+    if (count === 1) {
+      out = out.replace(line, (_match, indent, gap) => `${indent}"${key}"${gap}"${escaped}"`);
+    } else {
+      // Insert a new line just before the closing brace of the bindings block.
+      const start = out.search(/"bindings"\s*\{/);
+      if (start < 0) throw new Error("No bindings block in the keybinds file.");
+      let depth = 0;
+      let close = -1;
+      for (let i = out.indexOf("{", start); i < out.length; i += 1) {
+        if (out[i] === "{") depth += 1;
+        else if (out[i] === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            close = i;
+            break;
+          }
+        }
+      }
+      if (close < 0) throw new Error("Keybinds block is not closed.");
+      const lineStart = out.lastIndexOf("\n", close) + 1;
+      out = `${out.slice(0, lineStart)}\t\t"${key}"\t\t"${escaped}"${eol}${out.slice(lineStart)}`;
+    }
+    changed += 1;
+  }
+  return { text: out, changed };
+}
 
 // Editable entries of one file as [{ key, value }]. Video: the "setting.*" keys in the
 // "video.cfg" block. Convars: every string entry in config > convars.
@@ -237,6 +288,7 @@ function escapeRegExp(text) {
 // text, so the file stays in Steam's format. Returns { text, changed } where changed counts the
 // values that actually differ.
 function applyEdits(text, kind, edits) {
+  if (kind === "bindings") return applyBindingEdits(text, edits);
   const current = new Map(settingsFromText(text, kind).map(({ key, value }) => [key, value]));
   let out = text;
   let changed = 0;
@@ -265,6 +317,8 @@ function readSettings(storeRoot, steamId64, snapshotId) {
   const dir = path.join(storeDirFor(storeRoot, steamId64), snapshotId);
   const result = {};
   for (const [kind, name] of Object.entries(EDITABLE)) {
+    // Keybinds are read with readBindings, not as settings.
+    if (kind === "bindings") continue;
     const file = path.join(dir, name);
     result[kind] = fs.existsSync(file) ? settingsFromText(fs.readFileSync(file, "utf8"), kind) : null;
   }
@@ -327,7 +381,40 @@ function saveSettings({ storeRoot, steamId64, snapshotId, changes, now = new Dat
   return readMeta(storeDir, id);
 }
 
+// Writes edited values into Steam's own CS2 files for this account. Before writing, Steam's
+// current files are saved as a backup, so the change can be undone from the backup list.
+// Each file keeps Steam's text except the edited lines. Callers must make sure Steam is closed.
+// changes: { video?: { key: value }, convars?: { key: value } }. Returns { backupId, changedCount }.
+function writeToSteam({ steamRoot, storeRoot, steamId64, changes, now = new Date() }) {
+  if (!changes || typeof changes !== "object") throw new Error("No changes to save.");
+  for (const kind of Object.keys(changes)) {
+    if (!(kind in EDITABLE)) throw new Error("Unknown settings group.");
+  }
+  const cfgDir = sourceDirFor(steamRoot, steamId64);
+  const plan = [];
+  for (const [kind, edits] of Object.entries(changes)) {
+    if (!edits || Object.keys(edits).length === 0) continue;
+    const file = path.join(cfgDir, EDITABLE[kind]);
+    if (!fs.existsSync(file)) throw new Error(`Steam has no ${EDITABLE[kind]} for this account.`);
+    const result = applyEdits(fs.readFileSync(file, "utf8"), kind, edits);
+    plan.push({ file, result });
+  }
+  const changedCount = plan.reduce((sum, item) => sum + item.result.changed, 0);
+  if (changedCount === 0) throw new Error("Nothing changed.");
+
+  // Backup of Steam's current state first, so the write can be rolled back.
+  const backup = createSnapshot({ steamRoot, storeRoot, steamId64, now });
+
+  for (const { file, result } of plan) {
+    const tmp = `${file}.nyx-tmp`;
+    fs.writeFileSync(tmp, Buffer.from(result.text, "utf8"));
+    fs.renameSync(tmp, file);
+  }
+  return { backupId: backup ? backup.id : null, changedCount };
+}
+
 module.exports = {
+  writeToSteam,
   accountIdFor,
   sourceDirFor,
   parseKeyValues,

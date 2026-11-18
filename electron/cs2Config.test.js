@@ -211,3 +211,58 @@ test("removeStore deletes all snapshots for the account", () => {
   cs2.removeStore(storeRoot, steamId);
   assert.equal(fs.existsSync(path.join(storeRoot, steamId)), false);
 });
+
+test("writeToSteam edits Steam's files and keeps a backup of the previous state", () => {
+  const id = "76561198188880847";
+  const video = '"Video"\n{\n\t"setting.fps_max"\t\t"0"\n}\n';
+  const steamRoot = makeSteam(id, { "cs2_video.txt": video, "cs2_user_keys_0_slot0.vcfg": KEYS });
+  const store = tempStore();
+  const result = cs2.writeToSteam({
+    steamRoot,
+    storeRoot: store,
+    steamId64: id,
+    changes: { video: { "setting.fps_max": "300" } },
+  });
+  assert.equal(result.changedCount, 1);
+  assert.ok(result.backupId, "a backup is created before writing");
+  const cfg = path.join(steamRoot, "userdata", cs2.accountIdFor(id), "730", "local", "cfg");
+  const written = fs.readFileSync(path.join(cfg, "cs2_video.txt"), "utf8");
+  assert.match(written, /"setting\.fps_max"\t\t"300"/);
+  assert.equal(fs.readFileSync(path.join(cfg, "cs2_user_keys_0_slot0.vcfg"), "utf8"), KEYS);
+  const backed = fs.readFileSync(path.join(store, id, result.backupId, "cs2_video.txt"), "utf8");
+  assert.equal(backed, video);
+});
+
+test("writeToSteam refuses an unknown setting and writes nothing", () => {
+  const id = "76561198188880847";
+  const video = '"Video"\n{\n\t"setting.fps_max"\t\t"0"\n}\n';
+  const steamRoot = makeSteam(id, { "cs2_video.txt": video });
+  assert.throws(
+    () => cs2.writeToSteam({ steamRoot, storeRoot: tempStore(), steamId64: id, changes: { video: { "setting.nope": "1" } } }),
+    /Unknown setting/,
+  );
+  const cfg = path.join(steamRoot, "userdata", cs2.accountIdFor(id), "730", "local", "cfg");
+  assert.equal(fs.readFileSync(path.join(cfg, "cs2_video.txt"), "utf8"), video);
+});
+
+test("writeToSteam changes an existing keybind and adds a new one inside the bindings block", () => {
+  const id = "76561198188880847";
+  const steamRoot = makeSteam(id, { "cs2_user_keys_0_slot0.vcfg": KEYS });
+  const store = tempStore();
+  const result = cs2.writeToSteam({
+    steamRoot,
+    storeRoot: store,
+    steamId64: id,
+    changes: { bindings: { g: "+jump", F5: "toggleconsole" } },
+  });
+  assert.equal(result.changedCount, 2);
+  const cfg = path.join(steamRoot, "userdata", cs2.accountIdFor(id), "730", "local", "cfg");
+  const written = fs.readFileSync(path.join(cfg, "cs2_user_keys_0_slot0.vcfg"), "utf8");
+  assert.match(written, /"g"\t\t"\+jump"/);
+  assert.match(written, /\t\t"F5"\t\t"toggleconsole"\n\t\}\n\}/);
+  assert.deepEqual(
+    cs2.bindingsFromKeys(written).find((bind) => bind.key === "F5"),
+    { key: "F5", command: "toggleconsole" },
+  );
+  assert.ok(result.backupId);
+});

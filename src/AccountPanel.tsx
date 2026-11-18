@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Account, LoginStart } from "./types";
 import { displayStatus, localInputToIso } from "./status";
-import { Avatar, DetailStatus, errorText, guardNotice, signInBlock } from "./shared";
+import { Avatar, DetailStatus, errorText, guardNotice, signInBlock, useCooldownClock } from "./shared";
 import { Icon, type IconName } from "./Icon";
 
 // Root of the attached account panel window. Follows the account the main window selects.
@@ -9,7 +9,7 @@ export function AccountWindow({ initialId }: { initialId: string }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedId, setSelectedId] = useState(initialId);
   const [loaded, setLoaded] = useState(false);
-  const [now, setNow] = useState(() => new Date());
+  const now = useCooldownClock(accounts);
 
   useEffect(() => {
     window.sah
@@ -19,11 +19,9 @@ export function AccountWindow({ initialId }: { initialId: string }) {
       .finally(() => setLoaded(true));
     const offAccounts = window.sah.onAccountsChanged(setAccounts);
     const offSelect = window.sah.onPanelSelect(setSelectedId);
-    const timer = setInterval(() => setNow(new Date()), 1000);
     return () => {
       offAccounts();
       offSelect();
-      clearInterval(timer);
     };
   }, []);
 
@@ -66,7 +64,7 @@ function AccountPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Saved-login form state. The password is cleared after use.
-  const [loginName, setLoginName] = useState(account.steam?.accountName ?? "");
+  const [loginName, setLoginName] = useState(account.steam?.accountName || account.loginName || "");
   const [loginPassword, setLoginPassword] = useState("");
   // True when the fields were filled with the login generated during signup.
   const [fromSignup, setFromSignup] = useState(false);
@@ -86,8 +84,6 @@ function AccountPanel({
   const [loginGuard, setLoginGuard] = useState<LoginStart | null>(null);
   const [guardCode, setGuardCode] = useState("");
   const [manualValue, setManualValue] = useState("");
-  // Result of the last mailbox lookup for a Steam Guard code, or null when not shown.
-  const [mailCode, setMailCode] = useState<{ code: string | null; note: string } | null>(null);
   const [mailCodeBusy, setMailCodeBusy] = useState(false);
 
   // Password shown in the panel. Loaded from the vault only when the user asks for it.
@@ -114,13 +110,20 @@ function AccountPanel({
     }
   }
 
-  async function lookupMailCode() {
+  // Fills the Steam Guard field with the newest Steam code from the saved mailbox.
+  async function fillGuardFromMail() {
     setMailCodeBusy(true);
-    setMailCode(null);
+    setError(null);
     try {
-      setMailCode(await window.sah.getGuardCode());
+      const result = await window.sah.getGuardCode();
+      if (result.code) {
+        setGuardCode(result.code);
+        setNotice("Steam Guard code filled from the mailbox.");
+      } else {
+        setError(result.note);
+      }
     } catch (e) {
-      setMailCode({ code: null, note: errorText(e) });
+      setError(errorText(e));
     } finally {
       setMailCodeBusy(false);
     }
@@ -221,6 +224,8 @@ function AccountPanel({
   }
 
   const status = displayStatus(account, now);
+  // The Steam login name: from Steam's list when it has the account, else the name saved in the vault.
+  const steamName = account.steam?.accountName || account.loginName || null;
 
   return (
     <div className="panel">
@@ -245,7 +250,25 @@ function AccountPanel({
         <Avatar url={account.avatarUrl} name={account.displayName} size="lg" />
         <div className="hero-text">
           <h2>{account.displayName}</h2>
-          <span className="sid">{account.steamId64}</span>
+          <span className="sid sid-copy">
+            <button
+              type="button"
+              className="sid-value"
+              title="Copy SteamID64"
+              onClick={() => copyText(account.steamId64, "SteamID64")}
+            >
+              {account.steamId64}
+            </button>
+            <button
+              type="button"
+              className="icon-btn small"
+              title="Copy SteamID64"
+              aria-label="Copy SteamID64"
+              onClick={() => copyText(account.steamId64, "SteamID64")}
+            >
+              <Icon name="copy" size={12} />
+            </button>
+          </span>
         </div>
       </div>
 
@@ -254,37 +277,31 @@ function AccountPanel({
           <Icon name="clock" size={12} />
           Cooldown
         </span>
-        <DetailStatus status={status} now={now} />
+        <DetailStatus status={status} />
       </div>
 
       <Section icon="key" title="Login details">
         <div className="row">
           <span className="muted small">Name</span>
-          <code>{account.steam?.accountName ?? "Unknown"}</code>
-          <button
-            disabled={!account.steam?.accountName}
-            onClick={() => copyText(account.steam?.accountName ?? "", "Name")}
-          >
+          <code>{steamName ?? "Unknown"}</code>
+          <button disabled={!steamName} onClick={() => copyText(steamName ?? "", "Name")}>
             Copy
           </button>
         </div>
         <div className="row">
-          <span className="muted small">SteamID64</span>
-          <code>{account.steamId64}</code>
-          <button onClick={() => copyText(account.steamId64, "SteamID64")}>Copy</button>
-        </div>
-        <div className="row">
           <span className="muted small">Password</span>
-          <code>{shownPassword ?? "••••••••"}</code>
-          {account.passwordSaved ? (
-            <>
-              <button onClick={() => (shownPassword !== null ? setShownPassword(null) : revealPassword(false))}>
-                {shownPassword !== null ? "Hide" : "Show"}
-              </button>
-              <button onClick={() => revealPassword(true)}>Copy</button>
-            </>
-          ) : (
-            <span className="muted small">Not saved yet. Use Save login below.</span>
+          <code>{account.passwordSaved ? (shownPassword ?? "••••••••") : "Not saved"}</code>
+          <button
+            disabled={!account.passwordSaved}
+            onClick={() => (shownPassword !== null ? setShownPassword(null) : revealPassword(false))}
+          >
+            {shownPassword !== null ? "Hide" : "Show"}
+          </button>
+          <button disabled={!account.passwordSaved} onClick={() => revealPassword(true)}>
+            Copy
+          </button>
+          {!account.passwordSaved && (
+            <span className="muted small">Save login below once to store the password.</span>
           )}
         </div>
       </Section>
@@ -313,6 +330,15 @@ function AccountPanel({
               onChange={(e) => setGuardCode(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && guardCode.trim() && submitGuardCode()}
             />
+            <button
+              className="ghost"
+              title="Read the newest Steam code from the saved mailbox (last 15 min)"
+              onClick={fillGuardFromMail}
+              disabled={mailCodeBusy || busy}
+            >
+              <Icon name="key" />
+              {mailCodeBusy ? "Reading..." : "From mailbox"}
+            </button>
             <button onClick={submitGuardCode} disabled={busy || !guardCode.trim()}>
               <Icon name="check" />
               Submit
@@ -320,23 +346,6 @@ function AccountPanel({
           </div>
         ) : (
           <div className="stack">
-            <div className="row">
-              <button onClick={lookupMailCode} disabled={mailCodeBusy || busy}>
-                <Icon name="key" />
-                {mailCodeBusy ? "Reading mailbox..." : "Get Steam Guard code"}
-              </button>
-            </div>
-            {mailCode && (
-              <div className="row">
-                {mailCode.code ? (
-                  <>
-                    <code className="sid">{mailCode.code}</code>
-                    <button onClick={() => navigator.clipboard.writeText(mailCode.code ?? "")}>Copy</button>
-                  </>
-                ) : null}
-                <span className="muted small">{mailCode.note}</span>
-              </div>
-            )}
             <input
               placeholder="Steam account name"
               value={loginName}
