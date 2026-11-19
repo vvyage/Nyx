@@ -32,15 +32,7 @@ Requirements: Windows 10 or 11
   - "App window" mode is the default. "Default browser" is the fallback.
   - Mail credentials are typed each time and never stored.
 
-## Download counts
-
-The badge above shows the total downloads of all release files (it can lag a few
-minutes). To see per-release and per-file counts, run:
-
-```powershell
-gh api repos/vvyage/Nyx-CS2/releases --jq '.[] | {tag: .tag_name, assets: [.assets[] | {name, download_count}]}'
-```
-
+  
 ## Build from source
 
 Requirements: Windows 10 or 11, Node.js LTS.
