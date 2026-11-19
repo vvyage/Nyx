@@ -8,7 +8,7 @@ Requirements: Windows 10 or 11
 ## Install (end users)
 
 1. Download the latest Nyx release.
-2. Run the latest [Nyx.exe](https://github.com/vvyage/Nyx/releases/)
+2. Run the latest [Nyx Setup](https://github.com/vvyage/Nyx/releases/)
 3. Windows SmartScreen may warn "unknown publisher" because the build is not
    code-signed. Would cost me too much for this small project. 
    Choose **More info > Run anyway**.
