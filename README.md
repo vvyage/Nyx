@@ -1,5 +1,7 @@
 # Steam Account Helper
 
+![Total downloads](https://img.shields.io/github/downloads/vvyage/Nyx-CS2/total)
+
 Windows desktop app that tracks each Steam account's CS2 matchmaking cooldown.
 Everything stays on your PC. Accounts, the encrypted vault, and the web sessions
 live in `%APPDATA%\steam-account-helper\`.
@@ -28,6 +30,15 @@ live in `%APPDATA%\steam-account-helper\`.
   - Gmail requires an app password (2-Step Verification must be on).
   - "Pop-Up Window" mode is the default. "In-Browser" is the fallback.
   - Mail credentials are typed each time and never stored.
+
+## Download counts
+
+The badge above shows the total downloads of all release files (it can lag a few
+minutes). To see per-release and per-file counts, run:
+
+```powershell
+gh api repos/vvyage/Nyx-CS2/releases --jq '.[] | {tag: .tag_name, assets: [.assets[] | {name, download_count}]}'
+```
 
 ## Build from source (developers)
 
