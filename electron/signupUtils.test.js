@@ -38,6 +38,36 @@ test("mailText decodes base64 body lines next to the raw text", () => {
   assert.equal(utils.extractSteamGuardCode(text), "Q9WRT");
 });
 
+test("mailText decodes a short base64 line under 40 characters", () => {
+  const encoded = Buffer.from("Code: Q9WRT").toString("base64");
+  assert.ok(encoded.length < 40);
+  assert.equal(utils.extractSteamGuardCode(utils.mailText(`Subject: x\n\n${encoded}\n`)), "Q9WRT");
+});
+
+test("mailText decodes wrapped base64 lines of 76 characters", () => {
+  const encoded = Buffer.from("Hello,\nYour Steam Guard code is: KDNJM\nThanks, Steam Support.\n".repeat(3)).toString("base64");
+  const wrapped = encoded.match(/.{1,76}/g).join("\n");
+  assert.equal(utils.extractSteamGuardCode(utils.mailText(`Subject: x\n\n${wrapped}\n`)), "KDNJM");
+});
+
+test("mailText leaves a plain 5-character code alone and does not treat it as base64", () => {
+  const text = utils.mailText("Your Steam Guard code is:\nKDNJM\n");
+  assert.equal(text, "Your Steam Guard code is:\nKDNJM\n");
+  assert.equal(utils.extractSteamGuardCode(text), "KDNJM");
+});
+
+test("extractSteamGuardCode reads a quoted-printable HTML mail with a soft-broken code", () => {
+  const raw = [
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "<table><tr><td>Steam Guard code</td></tr>",
+    "<tr><td style=3D\"font-size:20px\">KD=",
+    "NJM</td></tr></table>",
+  ].join("\n");
+  assert.equal(utils.extractSteamGuardCode(utils.mailText(raw)), "KDNJM");
+});
+
 test("generated passwords differ between calls", () => {
   assert.notEqual(utils.generatePassword(), utils.generatePassword());
 });

@@ -224,7 +224,9 @@ async function watchForConfirmation(session) {
       }
       await sleep(MAIL_POLL_MS);
     }
-    setMessage(session, "No Steam confirmation email found yet. Check your mailbox, or cancel the signup.");
+    if (active !== session) return;
+    const report = await mailboxReport(session.mail, session.since);
+    setMessage(session, `No Steam confirmation email found after ${MAIL_WAIT_MS / 60000} min. ${report} Check your mailbox, or cancel the signup.`);
   } catch (error) {
     setMessage(session, `Mailbox check failed: ${mailErrorText(error)}. Open Steam's confirmation link yourself.`);
   } finally {
@@ -327,6 +329,38 @@ async function newestMatchInFolder(client, folder, since, pick) {
   }
 }
 
+// A short, secret-free summary of what the mailbox holds since `since`, for a timeout message:
+// how many Steam emails each folder has and when the newest arrived. Message bodies and
+// addresses are never included. Never throws.
+async function mailboxReport(mail, since) {
+  try {
+    return await withMailbox(mail, async (client) => {
+      const parts = [];
+      for (const folder of ["INBOX", utils.spamFolderFor(mail.host)]) {
+        try {
+          const lock = await client.getMailboxLock(folder);
+          try {
+            const uids = (await client.search({ from: "steampowered.com", since: new Date(since) }, { uid: true })) || [];
+            let newest = "";
+            if (uids.length) {
+              const last = await client.fetchOne(uids[uids.length - 1], { internalDate: true }, { uid: true });
+              if (last?.internalDate) newest = `, newest at ${new Date(last.internalDate).toLocaleTimeString()}`;
+            }
+            parts.push(`${folder}: ${uids.length} Steam email${uids.length === 1 ? "" : "s"}${newest}`);
+          } finally {
+            lock.release();
+          }
+        } catch {
+          parts.push(`${folder}: not readable`);
+        }
+      }
+      return `Checked ${parts.join("; ")}.`;
+    });
+  } catch (error) {
+    return `The mailbox could not be checked (${mailErrorText(error)}).`;
+  }
+}
+
 // The confirmation link in the newest Steam email, or null.
 async function findConfirmationLink(mail, since) {
   return withMailbox(mail, (client) => newestAcrossFolders(client, mail, since, utils.extractConfirmationLink));
@@ -355,7 +389,8 @@ async function submitEmailCode(pendingId, mail, since) {
       return { submitted: false, note: `The code from the email was not accepted: ${error.message}` };
     }
   }
-  return { submitted: false, note: "No Steam Guard email reached the mailbox in time." };
+  const report = await mailboxReport(mail, since);
+  return { submitted: false, note: `No Steam Guard email reached the mailbox in time. ${report}` };
 }
 
 // Waits for a Steam Guard email received since `since` and returns its code, without submitting

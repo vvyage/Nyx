@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, Notification, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Notification, nativeImage, screen } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
@@ -910,6 +910,26 @@ const LOCKED_WINDOW = {
   icon: process.platform === "win32" ? windowIconPath : iconPath,
 };
 
+// Sets the taskbar icon explicitly. The constructor's icon option alone left Electron's logo on
+// the taskbar in dev runs, so the image is also set with setIcon after the window exists.
+// The process-level app ID alone did not group the taskbar button under Nyx: the button kept the
+// exe's name and icon ("Electron"). setAppDetails sets the ID and icon on each window itself.
+function applyWindowIcon(win) {
+  if (process.platform !== "win32" || !win || win.isDestroyed()) return;
+  const icon = nativeImage.createFromPath(windowIconPath);
+  if (icon.isEmpty()) {
+    console.warn(`[window] could not load icon: ${windowIconPath}`);
+    return;
+  }
+  win.setIcon(icon);
+  win.setAppDetails({
+    appId: APP_USER_MODEL_ID,
+    appIconPath: windowIconPath,
+    appIconIndex: 0,
+    relaunchDisplayName: "Nyx",
+  });
+}
+
 function webPreferences() {
   return {
     preload: path.join(__dirname, "preload.cjs"),
@@ -956,6 +976,7 @@ function createWindow() {
     height: mainHeight(),
     webPreferences: webPreferences(),
   });
+  applyWindowIcon(mainWindow);
   mainWindow.center();
   // The account panel follows the main window while it is dragged.
   mainWindow.on("move", placePanel);
@@ -1017,6 +1038,7 @@ function openPanel(accountId) {
     webPreferences: webPreferences(),
   });
   panelWindow = win;
+  applyWindowIcon(win);
   // Placed before it is shown; the renderer reveals it once mounted.
   placePanel();
   win.on("closed", () => {
@@ -1088,6 +1110,7 @@ function openCs2(accountId, tab = "video") {
     webPreferences: webPreferences(),
   });
   cs2Window = win;
+  applyWindowIcon(win);
   win.on("closed", () => {
     cs2Window = null;
     cs2Closing = false;
@@ -1160,7 +1183,8 @@ function registerWindowControls() {
 
 // Windows groups notifications under this id. It matches the installer's appId so
 // notifications from the installed app and from `npm start` are attributed the same way.
-app.setAppUserModelId("local.steamaccounthelper");
+const APP_USER_MODEL_ID = "local.steamaccounthelper";
+app.setAppUserModelId(APP_USER_MODEL_ID);
 
 // In dev (`npm start`) Windows has no installed shortcut for this AUMID, so toasts show
 // "Electron" and its logo. Registering a display name and icon for the AUMID in HKCU fixes
@@ -1168,7 +1192,8 @@ app.setAppUserModelId("local.steamaccounthelper");
 function registerNotificationIdentity() {
   if (process.platform !== "win32" || app.isPackaged) return;
   const key = "HKCU\\Software\\Classes\\AppUserModelId\\local.steamaccounthelper";
-  const icon = path.resolve(iconPath);
+  // IconUri must be an .ico; a PNG here is ignored by Windows.
+  const icon = path.resolve(windowIconPath);
   try {
     execFileSync("reg", ["add", key, "/v", "DisplayName", "/t", "REG_SZ", "/d", "Nyx", "/f"], { windowsHide: true });
     execFileSync("reg", ["add", key, "/v", "IconUri", "/t", "REG_SZ", "/d", icon, "/f"], { windowsHide: true });

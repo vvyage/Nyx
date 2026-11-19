@@ -709,6 +709,15 @@ button.icon-only {
   flex-wrap: wrap;
   gap: 6px;
 }
+.sign-in-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: help;
+}
+.card-foot .sign-in-hint + .sign-in {
+  margin-left: 0;
+}
 .card-foot .sign-in {
   margin-left: auto;
   display: inline-flex;

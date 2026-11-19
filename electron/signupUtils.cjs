@@ -102,14 +102,23 @@ function extractSteamGuardCode(raw) {
   return null;
 }
 
+// Base64 lines are at least 8 characters with a length that is a multiple of 4. Shorter lines,
+// such as a 5-character code, are never treated as base64.
+const BASE64_LINE = /^[A-Za-z0-9+/]{8,}={0,2}$/;
+
 // Decodes the body of a raw message as text the code and link finders can search: the
-// quoted-printable text, plus any base64 lines decoded in place (base64 mail bodies are
-// written as lines of 76 characters).
+// quoted-printable text, plus any base64 lines decoded in place. Base64 mail bodies are
+// written as lines of 76 characters, and a short message can be a single short line.
 function mailText(source) {
   const text = decodeQuotedPrintable(source);
   const decoded = [];
-  for (const line of text.match(/^[A-Za-z0-9+/]{40,}={0,2}$/gm) || []) {
-    decoded.push(Buffer.from(line, "base64").toString("utf8"));
+  // Read base64 from the raw source: the quoted-printable soft-break rule would strip the
+  // "=" padding at the end of a base64 line.
+  for (const line of String(source).split(/\r?\n/)) {
+    const candidate = line.trim();
+    if (BASE64_LINE.test(candidate) && candidate.length % 4 === 0) {
+      decoded.push(Buffer.from(candidate, "base64").toString("utf8"));
+    }
   }
   return decoded.length ? `${text}\n${decoded.join("\n")}` : text;
 }

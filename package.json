@@ -1,6 +1,6 @@
 {
   "name": "nyx",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "private": true,
   "description": "Windows-local tracker for CS2 matchmaking cooldowns",
   "author": "Nyx",

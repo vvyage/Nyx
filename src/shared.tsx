@@ -213,6 +213,15 @@ export function signInBlock(account: Account): string | null {
   return null;
 }
 
+// Short text shown on the card beside a disabled Sign in button, or null when none is needed.
+// The full reason from signInBlock is kept as the button's tooltip.
+export function signInHint(account: Account): string | null {
+  if (account.steamSignedIn) return null;
+  if (!account.steam) return "Not on this machine";
+  if (!account.steam.rememberPassword) return "Needs Remember my password";
+  return null;
+}
+
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

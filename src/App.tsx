@@ -5,7 +5,7 @@ import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
 import { AccountWindow } from "./AccountPanel";
 import { Cs2Window, cs2TabFrom } from "./Cs2Window";
-import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock, useCooldownClock } from "./shared";
+import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock, signInHint, useCooldownClock } from "./shared";
 import { Icon } from "./Icon";
 
 // The same bundle serves the main window, the attached account panel (?panel=<id>), and the
@@ -905,6 +905,11 @@ function Dashboard() {
                     </div>
                   )}
                 </div>
+                {signInHint(account) && (
+                  <span className="sign-in-hint" title={signInBlock(account) ?? undefined}>
+                    {signInHint(account)}
+                  </span>
+                )}
                 <button
                   className="ghost small sign-in"
                   disabled={busy || !!signInBlock(account)}
