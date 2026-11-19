@@ -7,11 +7,12 @@ Requirements: Windows 10 or 11
 
 ## Install (end users)
 
-1. Run the latest Nyx.exe
-2. Windows SmartScreen may warn "unknown publisher" because the build is not
+1. Download the latest Nyx release.
+2. Run the latest [Nyx.exe](https://github.com/vvyage/Nyx/releases/)
+3. Windows SmartScreen may warn "unknown publisher" because the build is not
    code-signed. Would cost me too much for this small project. 
    Choose **More info > Run anyway**.
-3. On first launch, create a master password. A recovery code is shown once.
+4. On first launch, create a master password. A recovery code is shown once.
    Store it somewhere safe. Without the master password or the recovery code,
    saved logins cannot be decrypted.
 
