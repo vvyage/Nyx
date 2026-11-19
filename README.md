@@ -1,6 +1,12 @@
-﻿# Nyx - Steam Account Loader / Helper
+﻿<p align="center">
+  <img src="src/assets/logo.png" alt="Nyx logo" width="160">
+</p>
+
+# Nyx - Steam Account Loader / Helper
 
 ![Total downloads](https://img.shields.io/github/downloads/vvyage/Nyx-CS2/total)
+[![Discord](https://img.shields.io/badge/Join%20the%20Discord-discord.gg%2FV2fuPN3D38-5865F2?logo=discord&logoColor=white)](https://discord.gg/V2fuPN3D38)
+![Discord name](https://img.shields.io/badge/Discord-%40vvyage-5865F2?logo=discord&logoColor=white)
 
 Vibe coded shiish that tracks each Steam account's CS2 matchmaking cooldown and allows you to create accs easily from the program.
 Works okayishly i guess.
@@ -62,3 +68,14 @@ encrypted vault.
 - `npm audit` may report moderate advisories in electron-builder's build-time
   dependencies. They are not shipped in the app. Do not run
   `npm audit fix --force`, which is a breaking change.
+
+## License
+
+Nyx is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+You may use, modify, and share it for noncommercial purposes. Commercial use
+is not permitted without a separate agreement with the author.
+
+## Contributing
+
+Pull requests and issues are welcome. By submitting a contribution, you agree
+that it is licensed under the same PolyForm Noncommercial License 1.0.0 terms.
