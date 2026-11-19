@@ -27,12 +27,13 @@ export interface Account {
   displayName: string;
   // Present when Steam lists this account on this machine.
   steam: SteamInfo | null;
-  // True when this account's Steam web session is saved in the app.
-  webSignedIn: boolean;
   // True when Steam is running and currently signed in as this account.
   steamSignedIn: boolean;
   // True when a refresh token for this account is stored in the encrypted vault.
   loginSaved: boolean;
+  passwordSaved: boolean;
+  // The Steam login name saved in the vault, or null when none is saved.
+  loginName: string | null;
 }
 
 export interface CooldownProgress {
@@ -109,6 +110,12 @@ export type DisplayStatus =
 
 // idle: nothing to show. available: a newer release exists. downloading: fetching it.
 // downloaded: ready to install on restart.
+// Notification preferences. Both are off by default.
+export interface AppSettings {
+  notifyCooldownEnd: boolean;
+  notifyCheckFailed: boolean;
+}
+
 export interface UpdateStatus {
   state: "idle" | "available" | "downloading" | "downloaded";
   version: string | null;
@@ -121,7 +128,22 @@ export interface Cs2Snapshot {
   createdAt: string;
   bindingCount: number | null;
   bindingNote: string | null;
+  // Set on backups made by saving edits: the backup the edits started from, and how many values changed.
+  basedOn?: string;
+  changedSettings?: number;
   files: { name: string; size: number; sha256: string }[];
+}
+
+// One editable setting of a backup: a video option or a convar. Values are strings, as in the file.
+export interface Cs2Setting {
+  key: string;
+  value: string;
+}
+
+// Editable settings of one backup. A file missing from the backup is null.
+export interface Cs2Settings {
+  video: Cs2Setting[] | null;
+  convars: Cs2Setting[] | null;
 }
 
 export interface Cs2State {
@@ -136,6 +158,17 @@ export interface Cs2Binding {
   command: string;
 }
 
+// Tabs of the CS2 window.
+export type Cs2TabId = "video" | "crosshair" | "mouse" | "keybinds";
+
+// Changes sent to the main process. Each group maps a setting name (or key name for bindings)
+// to its new value.
+export interface Cs2Changes {
+  video?: Record<string, string>;
+  convars?: Record<string, string>;
+  bindings?: Record<string, string>;
+}
+
 export interface SahApi {
   listAccounts(): Promise<Account[]>;
   addAccount(input: { steamId64: string }): Promise<Account[]>;
@@ -145,7 +178,6 @@ export interface SahApi {
   clearCooldown(id: string): Promise<Account[]>;
   refreshCooldown(id: string): Promise<Account[]>;
   refreshAllCooldowns(): Promise<Account[]>;
-  webSignIn(id: string): Promise<{ message: string; accounts: Account[] }>;
   signIn(steamId64: string): Promise<{ message: string }>;
   vaultStatus(): Promise<VaultStatus>;
   vaultSetup(password: string): Promise<{ recoveryCode: string; status: VaultStatus }>;
@@ -165,19 +197,40 @@ export interface SahApi {
   cs2List(id: string): Promise<Cs2State>;
   cs2Import(id: string): Promise<Cs2State>;
   cs2View(id: string, snapshotId: string): Promise<Cs2Binding[]>;
+  cs2Settings(id: string, snapshotId: string): Promise<Cs2Settings>;
+  cs2SaveSettings(
+    id: string,
+    snapshotId: string,
+    changes: Cs2Changes,
+  ): Promise<{ state: Cs2State; snapshotId: string }>;
+  cs2ApplyToSteam(
+    id: string,
+    changes: Cs2Changes,
+  ): Promise<{ state: Cs2State; backupId: string | null; changedCount: number }>;
+  cs2Open(id: string, tab?: Cs2TabId): Promise<void>;
+  cs2Close(): Promise<void>;
+  onCs2Select(callback: (id: string) => void): () => void;
+  onCs2Tab(callback: (tab: Cs2TabId) => void): () => void;
+  getSettings(): Promise<AppSettings>;
+  saveSettings(change: Partial<AppSettings>): Promise<AppSettings>;
   getMailSettings(): Promise<SavedMail | null>;
   saveMailSettings(input: { email: string; mail: MailSettings }): Promise<{ ok: true }>;
   clearMailSettings(): Promise<{ ok: true }>;
+  getGuardCode(): Promise<{ code: string | null; note: string }>;
+  getAccountPassword(id: string): Promise<{ password: string }>;
   getUpdateStatus(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
   installUpdate(): Promise<{ ok: true }>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
   onAccountsChanged(callback: (accounts: Account[]) => void): () => void;
+  onNotice(callback: (text: string) => void): () => void;
   getCooldownProgress(): Promise<CooldownProgress>;
   onCooldownProgress(callback: (progress: CooldownProgress) => void): () => void;
   minimizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
   revealWindow(): Promise<void>;
+  setMainBoxed(boxed: boolean): Promise<void>;
+  moveWindowGroup(dx: number, dy: number): Promise<void>;
   openPanel(id: string): Promise<void>;
   closePanel(): Promise<void>;
   onPanelSelect(callback: (id: string) => void): () => void;

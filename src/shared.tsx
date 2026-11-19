@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Account, DisplayStatus, LoginStart, UpdateStatus } from "./types";
 import { formatDuration } from "./status";
 import logo from "./assets/logo.png";
@@ -12,8 +13,8 @@ const SHOWN_CLIP = "inset(0 0 0 0)";
 const HIDDEN_CLIP = "inset(0 100% 0 0)";
 
 // Wipes the whole window (box and content) from left to right. Opening reveals it from the
-// left edge; closing hides it back toward the left. The window is transparent, so the clipped
-// area shows the desktop rather than an empty box.
+// left edge; closing hides it back toward the left. The window is opaque (dark base colour), so
+// the clipped area shows that colour, not the desktop.
 function playWipe(win: HTMLElement, open: boolean): Promise<void> {
   const anim = win.animate(
     [{ clipPath: open ? HIDDEN_CLIP : SHOWN_CLIP }, { clipPath: open ? SHOWN_CLIP : HIDDEN_CLIP }],
@@ -37,6 +38,8 @@ export function Frame({
   minimizable = true,
   closable = true,
   showVersion = false,
+  groupDrag = false,
+  boxed = false,
 }: {
   children: ReactNode;
   title?: string;
@@ -44,9 +47,40 @@ export function Frame({
   minimizable?: boolean;
   closable?: boolean;
   showVersion?: boolean;
+  // Dragging the title bar moves the main window, and with it every attached window.
+  groupDrag?: boolean;
+  // Shows the frame as a centred box inside the full-size window (the vault screens).
+  boxed?: boolean;
 }) {
   const windowRef = useRef<HTMLDivElement>(null);
   const [version, setVersion] = useState<string | null>(null);
+  const dragPoint = useRef<{ x: number; y: number } | null>(null);
+
+  // Group drag: sends the pointer movement to the main process, which moves the main window.
+  // The attached windows follow through its move event.
+  function onGroupPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    // Pointer capture would retarget the click away from the window buttons, so they are skipped.
+    if ((event.target as HTMLElement).closest(".window-controls")) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragPoint.current = { x: event.screenX, y: event.screenY };
+  }
+  function onGroupPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const last = dragPoint.current;
+    if (!last) return;
+    // Whole pixels; the remainder stays in the anchor so the drag does not drift.
+    const dx = Math.round(event.screenX - last.x);
+    const dy = Math.round(event.screenY - last.y);
+    if (dx === 0 && dy === 0) return;
+    dragPoint.current = { x: last.x + dx, y: last.y + dy };
+    window.sah.moveWindowGroup(dx, dy).catch(() => undefined);
+  }
+  function onGroupPointerUp(event: ReactPointerEvent<HTMLElement>) {
+    dragPoint.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
 
   useEffect(() => {
     if (!showVersion) return;
@@ -60,9 +94,11 @@ export function Frame({
     const el = windowRef.current;
     if (!el) return;
     let cancelled = false;
-    // Shows the window, then starts the wipe once it is on screen.
-    window.sah
-      .revealWindow()
+    // Shrinks the main window to the vault box first (only the vault gate is boxed), then shows
+    // it, so the window never appears at dashboard size. IPC calls run in order.
+    const sized = boxed ? window.sah.setMainBoxed(true).catch(() => undefined) : Promise.resolve();
+    sized
+      .then(() => window.sah.revealWindow())
       .catch(() => undefined)
       .then(() => {
         if (!cancelled) void playWipe(el, true);
@@ -73,8 +109,14 @@ export function Frame({
   }, []);
 
   return (
-    <div className="window" ref={windowRef}>
-      <header className={draggable ? "titlebar" : "titlebar locked"}>
+    <div className={boxed ? "window boxed" : "window"} ref={windowRef}>
+      <header
+        className={groupDrag ? "titlebar group-drag" : draggable ? "titlebar" : "titlebar locked"}
+        onPointerDown={groupDrag ? onGroupPointerDown : undefined}
+        onPointerMove={groupDrag ? onGroupPointerMove : undefined}
+        onPointerUp={groupDrag ? onGroupPointerUp : undefined}
+        onPointerCancel={groupDrag ? onGroupPointerUp : undefined}
+      >
         <div className="titlebar-brand">
           <img className="titlebar-logo" src={logo} alt="" />
           <span>{title}</span>
@@ -204,7 +246,7 @@ export function Count({
   );
 }
 
-// Small status chip on a card: Steam, saved login, web session.
+// Small status chip on a card: Steam, saved login.
 export function Badge({
   icon,
   label,
@@ -231,12 +273,45 @@ export function guardNotice(start: LoginStart): string {
   return start.mailNote ? `${start.mailNote} ${ask}` : ask;
 }
 
-export function Pill({ status, now }: { status: DisplayStatus; now: Date }) {
+// The "now" used for status checks. It changes only when a stored cooldown ends (plus the
+// accounts list changing), so cards are not re-rendered every second. Countdown text ticks
+// on its own (see Countdown).
+export function useCooldownClock(accounts: Account[]): Date {
+  const [tick, setTick] = useState(0);
+  const now = useMemo(() => new Date(), [accounts, tick]);
+  useEffect(() => {
+    const current = Date.now();
+    let next = Infinity;
+    for (const account of accounts) {
+      const expires = account.cooldown?.expiresAt;
+      const until = expires ? Date.parse(expires) : NaN;
+      if (Number.isFinite(until) && until > current && until < next) next = until;
+    }
+    if (next === Infinity) return;
+    // setTimeout tops out near 24.8 days. A longer wait fires early and reschedules.
+    const delay = Math.min(next - current + 50, 2147483647);
+    const timer = window.setTimeout(() => setTick((value) => value + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [accounts, tick]);
+  return now;
+}
+
+// Remaining time until a date, redrawn every second. Only this span re-renders.
+export function Countdown({ until }: { until: Date }) {
+  const [current, setCurrent] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setCurrent(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{formatDuration(until.getTime() - current)}</>;
+}
+
+export function Pill({ status }: { status: DisplayStatus }) {
   if (status.kind === "blocked") {
     return (
       <span className="pill warn">
         <Icon name="clock" size={12} />
-        {formatDuration(status.until.getTime() - now.getTime())}
+        <Countdown until={status.until} />
       </span>
     );
   }
@@ -256,12 +331,12 @@ export function Pill({ status, now }: { status: DisplayStatus; now: Date }) {
   );
 }
 
-export function DetailStatus({ status, now }: { status: DisplayStatus; now: Date }) {
+export function DetailStatus({ status }: { status: DisplayStatus }) {
   if (status.kind === "blocked") {
     return (
       <>
         <span className="detail-main warn-text">
-          {formatDuration(status.until.getTime() - now.getTime())} left
+          <Countdown until={status.until} /> left
         </span>
         <span className="detail-sub">Until {status.until.toLocaleString()}</span>
       </>

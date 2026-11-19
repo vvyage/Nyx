@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { Account, Cs2Binding, Cs2State, LoginStart } from "./types";
+import type { Account, LoginStart } from "./types";
 import { displayStatus, localInputToIso } from "./status";
-import { Avatar, DetailStatus, errorText, guardNotice, signInBlock } from "./shared";
+import { Avatar, DetailStatus, errorText, guardNotice, signInBlock, useCooldownClock } from "./shared";
 import { Icon, type IconName } from "./Icon";
 
 // Root of the attached account panel window. Follows the account the main window selects.
@@ -9,7 +9,7 @@ export function AccountWindow({ initialId }: { initialId: string }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedId, setSelectedId] = useState(initialId);
   const [loaded, setLoaded] = useState(false);
-  const [now, setNow] = useState(() => new Date());
+  const now = useCooldownClock(accounts);
 
   useEffect(() => {
     window.sah
@@ -19,11 +19,9 @@ export function AccountWindow({ initialId }: { initialId: string }) {
       .finally(() => setLoaded(true));
     const offAccounts = window.sah.onAccountsChanged(setAccounts);
     const offSelect = window.sah.onPanelSelect(setSelectedId);
-    const timer = setInterval(() => setNow(new Date()), 1000);
     return () => {
       offAccounts();
       offSelect();
-      clearInterval(timer);
     };
   }, []);
 
@@ -53,130 +51,6 @@ function Section({ icon, title, children }: { icon: IconName; title: string; chi
   );
 }
 
-// CS2 settings for this account: one import from Steam (confirmed), kept as timestamped backups.
-function Cs2Section({ accountId }: { accountId: string }) {
-  const [state, setState] = useState<Cs2State | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [showBackups, setShowBackups] = useState(false);
-  const [viewing, setViewing] = useState<{ id: string; bindings: Cs2Binding[] } | null>(null);
-
-  useEffect(() => {
-    window.sah
-      .cs2List(accountId)
-      .then(setState)
-      .catch((e) => setError(errorText(e)));
-  }, [accountId]);
-
-  async function importNow() {
-    setBusy(true);
-    setError(null);
-    try {
-      setState(await window.sah.cs2Import(accountId));
-      setViewing(null);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setConfirming(false);
-      setBusy(false);
-    }
-  }
-
-  async function view(id: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      setViewing({ id, bindings: await window.sah.cs2View(accountId, id) });
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const latest = state?.snapshots[0] ?? null;
-  const backups = state?.snapshots ?? [];
-
-  return (
-    <Section icon="key" title="CS2 settings">
-      <p className="muted small">
-        {latest
-          ? `Last imported ${new Date(latest.createdAt).toLocaleString()}${
-              latest.bindingCount !== null ? `, ${latest.bindingCount} keybinds` : ""
-            }.`
-          : "Not imported yet."}
-        {state && !state.available && " No CS2 settings for this account on this PC right now."}
-      </p>
-
-      {error && <p className="cs2-error small">{error}</p>}
-
-      {confirming ? (
-        <div className="cs2-confirm">
-          <span>
-            Replace the Nyx copy with the current CS2 settings from Steam? The current copy is kept in Backups.
-          </span>
-          <div className="row">
-            <button onClick={importNow} disabled={busy}>
-              <Icon name="check" />
-              Import
-            </button>
-            <button className="ghost" onClick={() => setConfirming(false)} disabled={busy}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="row">
-          <button onClick={() => setConfirming(true)} disabled={busy || !state?.available}>
-            <Icon name="download" />
-            Import from Steam
-          </button>
-          <button className="ghost" onClick={() => setShowBackups((v) => !v)} disabled={backups.length === 0}>
-            Backups ({backups.length})
-          </button>
-        </div>
-      )}
-
-      {showBackups && backups.length > 0 && (
-        <ul className="cs2-backups">
-          {backups.map((snapshot) => (
-            <li key={snapshot.id}>
-              <span className="small">
-                {new Date(snapshot.createdAt).toLocaleString()}
-                {snapshot.bindingCount !== null ? ` · ${snapshot.bindingCount} keybinds` : " · keybinds unreadable"}
-              </span>
-              <button className="ghost small-btn" disabled={busy} onClick={() => view(snapshot.id)}>
-                View
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {viewing && (
-        <div className="cs2-view">
-          <div className="row">
-            <span className="small">{viewing.bindings.length} keybinds</span>
-            <button className="ghost small-btn" onClick={() => setViewing(null)}>
-              <Icon name="x" size={12} />
-              Close
-            </button>
-          </div>
-          <ul className="cs2-binds">
-            {viewing.bindings.map((bind, index) => (
-              <li key={`${bind.key}-${index}`}>
-                <span>{bind.key}</span>
-                <span>{bind.command}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </Section>
-  );
-}
-
 function AccountPanel({
   account,
   now,
@@ -190,7 +64,7 @@ function AccountPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Saved-login form state. The password is cleared after use.
-  const [loginName, setLoginName] = useState(account.steam?.accountName ?? "");
+  const [loginName, setLoginName] = useState(account.steam?.accountName || account.loginName || "");
   const [loginPassword, setLoginPassword] = useState("");
   // True when the fields were filled with the login generated during signup.
   const [fromSignup, setFromSignup] = useState(false);
@@ -210,6 +84,50 @@ function AccountPanel({
   const [loginGuard, setLoginGuard] = useState<LoginStart | null>(null);
   const [guardCode, setGuardCode] = useState("");
   const [manualValue, setManualValue] = useState("");
+  const [mailCodeBusy, setMailCodeBusy] = useState(false);
+
+  // Password shown in the panel. Loaded from the vault only when the user asks for it.
+  const [shownPassword, setShownPassword] = useState<string | null>(null);
+
+  async function copyText(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`${what} copied.`);
+    } catch {
+      setError(`Could not copy the ${what.toLowerCase()}.`);
+    }
+  }
+
+  // Loads the stored password. With copy=true it goes to the clipboard, otherwise it is shown.
+  async function revealPassword(copy: boolean) {
+    try {
+      setError(null);
+      const { password } = await window.sah.getAccountPassword(account.id);
+      if (copy) await copyText(password, "Password");
+      else setShownPassword(password);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  // Fills the Steam Guard field with the newest Steam code from the saved mailbox.
+  async function fillGuardFromMail() {
+    setMailCodeBusy(true);
+    setError(null);
+    try {
+      const result = await window.sah.getGuardCode();
+      if (result.code) {
+        setGuardCode(result.code);
+        setNotice("Steam Guard code filled from the mailbox.");
+      } else {
+        setError(result.note);
+      }
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setMailCodeBusy(false);
+    }
+  }
 
   // Runs an IPC call with busy/error handling. Returns true on success.
   async function run(action: () => Promise<Account[]>): Promise<boolean> {
@@ -228,21 +146,6 @@ function AccountPanel({
 
   async function refreshOne() {
     if (await run(() => window.sah.refreshCooldown(account.id))) setNotice("Cooldown checked.");
-  }
-
-  async function webSignIn() {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await window.sah.webSignIn(account.id);
-      onAccounts(result.accounts);
-      setNotice(result.message);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function saveManual() {
@@ -321,6 +224,8 @@ function AccountPanel({
   }
 
   const status = displayStatus(account, now);
+  // The Steam login name: from Steam's list when it has the account, else the name saved in the vault.
+  const steamName = account.steam?.accountName || account.loginName || null;
 
   return (
     <div className="panel">
@@ -345,7 +250,25 @@ function AccountPanel({
         <Avatar url={account.avatarUrl} name={account.displayName} size="lg" />
         <div className="hero-text">
           <h2>{account.displayName}</h2>
-          <span className="sid">{account.steamId64}</span>
+          <span className="sid sid-copy">
+            <button
+              type="button"
+              className="sid-value"
+              title="Copy SteamID64"
+              onClick={() => copyText(account.steamId64, "SteamID64")}
+            >
+              {account.steamId64}
+            </button>
+            <button
+              type="button"
+              className="icon-btn small"
+              title="Copy SteamID64"
+              aria-label="Copy SteamID64"
+              onClick={() => copyText(account.steamId64, "SteamID64")}
+            >
+              <Icon name="copy" size={12} />
+            </button>
+          </span>
         </div>
       </div>
 
@@ -354,8 +277,34 @@ function AccountPanel({
           <Icon name="clock" size={12} />
           Cooldown
         </span>
-        <DetailStatus status={status} now={now} />
+        <DetailStatus status={status} />
       </div>
+
+      <Section icon="key" title="Login details">
+        <div className="row">
+          <span className="muted small">Name</span>
+          <code>{steamName ?? "Unknown"}</code>
+          <button disabled={!steamName} onClick={() => copyText(steamName ?? "", "Name")}>
+            Copy
+          </button>
+        </div>
+        <div className="row">
+          <span className="muted small">Password</span>
+          <code>{account.passwordSaved ? (shownPassword ?? "••••••••") : "Not saved"}</code>
+          <button
+            disabled={!account.passwordSaved}
+            onClick={() => (shownPassword !== null ? setShownPassword(null) : revealPassword(false))}
+          >
+            {shownPassword !== null ? "Hide" : "Show"}
+          </button>
+          <button disabled={!account.passwordSaved} onClick={() => revealPassword(true)}>
+            Copy
+          </button>
+          {!account.passwordSaved && (
+            <span className="muted small">Save login below once to store the password.</span>
+          )}
+        </div>
+      </Section>
 
       <Section icon="monitor" title="Steam">
         <p className="muted small">
@@ -371,7 +320,7 @@ function AccountPanel({
             ? "Filled with the login generated during signup. Save login again to keep it current."
             : account.loginSaved
               ? "Refresh token saved in the encrypted vault. Save again if it is rejected."
-              : "The password is not stored. Only a refresh token is kept, encrypted in the vault."}
+              : "Password and refresh token are kept encrypted in the vault."}
         </p>
         {loginGuard ? (
           <div className="row">
@@ -381,6 +330,15 @@ function AccountPanel({
               onChange={(e) => setGuardCode(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && guardCode.trim() && submitGuardCode()}
             />
+            <button
+              className="ghost"
+              title="Read the newest Steam code from the saved mailbox (last 15 min)"
+              onClick={fillGuardFromMail}
+              disabled={mailCodeBusy || busy}
+            >
+              <Icon name="key" />
+              {mailCodeBusy ? "Reading..." : "From mailbox"}
+            </button>
             <button onClick={submitGuardCode} disabled={busy || !guardCode.trim()}>
               <Icon name="check" />
               Submit
@@ -396,7 +354,7 @@ function AccountPanel({
             />
             <input
               type="password"
-              placeholder="Password (not stored)"
+              placeholder="Password"
               value={loginPassword}
               onChange={(e) => setLoginPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && loginName.trim() && loginPassword && startSavedLogin()}
@@ -414,26 +372,6 @@ function AccountPanel({
         )}
       </Section>
 
-      <Section icon="globe" title="Web session">
-        <p className="muted small">
-          {account.webSignedIn
-            ? "Web session saved. Cooldowns are read automatically."
-            : "Optional fallback: sign in through Steam's web login in a window."}
-        </p>
-        <div className="row">
-          <button onClick={webSignIn} disabled={busy}>
-            <Icon name="globe" />
-            {account.webSignedIn ? "Re-sign in" : "Sign in (web)"}
-          </button>
-          <button className="ghost" disabled={busy || !account.webSignedIn} onClick={refreshOne}>
-            <Icon name="refresh" />
-            Check now
-          </button>
-        </div>
-      </Section>
-
-      <Cs2Section accountId={account.id} />
-
       <Section icon="calendar" title="Manual end">
         <div className="row">
           <input type="datetime-local" value={manualValue} onChange={(e) => setManualValue(e.target.value)} />
@@ -444,6 +382,10 @@ function AccountPanel({
       </Section>
 
       <div className="panel-footer">
+        <button className="ghost" disabled={busy || !account.loginSaved} onClick={refreshOne} title={account.loginSaved ? undefined : "Save a login first"}>
+          <Icon name="refresh" />
+          Check now
+        </button>
         <button className="ghost" disabled={busy} onClick={() => run(() => window.sah.clearCooldown(account.id))}>
           <Icon name="rotateCcw" />
           Clear cooldown

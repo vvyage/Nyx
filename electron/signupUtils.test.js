@@ -9,14 +9,14 @@ test("generated usernames are valid Steam account names", () => {
   }
 });
 
-test("generated passwords have all four character classes and the right length", () => {
+test("generated passwords are letters and digits, with both cases and a digit, and the right length", () => {
   for (let i = 0; i < 50; i++) {
     const password = utils.generatePassword();
     assert.equal(password.length, 20);
+    assert.match(password, /^[A-Za-z0-9]{20}$/);
     assert.match(password, /[a-z]/);
     assert.match(password, /[A-Z]/);
     assert.match(password, /\d/);
-    assert.match(password, /[!@#$%^&*]/);
   }
 });
 
@@ -24,6 +24,12 @@ test("extractSteamGuardCode finds the code in plain text and in an HTML cell", (
   assert.equal(utils.extractSteamGuardCode("Your Steam Guard code is: K7HB4\n"), "K7HB4");
   assert.equal(utils.extractSteamGuardCode("<td>Steam Guard code</td><td>K7HB4</td>"), "K7HB4");
   assert.equal(utils.extractSteamGuardCode("Hello, nothing to see here"), null);
+});
+
+test("extractSteamGuardCode finds a letters-only code in its own HTML cell", () => {
+  assert.equal(utils.extractSteamGuardCode("<td>Your Steam Guard code is:</td>\n<td>KDNJM</td>"), "KDNJM");
+  assert.equal(utils.extractSteamGuardCode("<p>Steam Guard code</p><p style=\"x\">KDNJM</p>"), "KDNJM");
+  assert.equal(utils.extractSteamGuardCode("Steam Guard code\nSTEAM\n"), null);
 });
 
 test("mailText decodes base64 body lines next to the raw text", () => {

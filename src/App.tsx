@@ -1,43 +1,80 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import type { Account, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
+import type { Account, AppSettings, Cs2TabId, CooldownProgress, LoginStart, SavedMail, SignupCredentials, SignupMode, VaultStatus } from "./types";
 import { presetForEmail } from "./mailPresets";
 import { displayStatus } from "./status";
 import { VaultSetup, VaultUnlock } from "./Vault";
 import { AccountWindow } from "./AccountPanel";
-import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock } from "./shared";
+import { Cs2Window, cs2TabFrom } from "./Cs2Window";
+import { Avatar, Badge, Count, Frame, Pill, UpdateButton, errorText, guardNotice, isClear, signInBlock, useCooldownClock } from "./shared";
 import { Icon } from "./Icon";
 
-// The same bundle serves the main window and the attached account panel (?panel=<id>).
-const panelId = new URLSearchParams(window.location.search).get("panel");
+// The same bundle serves the main window, the attached account panel (?panel=<id>), and the
+// attached CS2 settings window (?cs2=<id>).
+const params = new URLSearchParams(window.location.search);
+const panelId = params.get("panel");
+const cs2Id = params.get("cs2");
+
+// Shown over the add card while a Steam sign-in runs. A Steam Guard email can add a wait of up to a minute.
+const SIGNING_IN_MESSAGE = "Signing in to Steam. This can take up to a minute.";
 
 export function App() {
   if (panelId) {
     return (
-      <Frame title="Account" draggable={false} minimizable={false} closable={false}>
+      <Frame title="Account" groupDrag minimizable={false}>
         <AccountWindow initialId={panelId} />
+      </Frame>
+    );
+  }
+  if (cs2Id) {
+    return (
+      <Frame title="CS2 settings">
+        <Cs2Window initialId={cs2Id} initialTab={cs2TabFrom(params.get("tab"))} />
       </Frame>
     );
   }
   return <MainApp />;
 }
 
+// Time for the frame to grow from the vault box to the full window. Matches the .window transition.
+const GROW_MS = 320;
+
 // Shows the vault setup or unlock screen until the vault is open, then the dashboard.
+// The vault screens are a centred box. Unlocking grows the box to the full window (CSS transition),
+// then the dashboard replaces the vault screen.
 function MainApp() {
   const [vault, setVault] = useState<VaultStatus | null>(null);
+  // False while the vault screens are shown as a box. Set on unlock to start the grow.
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     window.sah.vaultStatus().then(setVault).catch(() => setVault({ exists: true, unlocked: false }));
   }, []);
 
-  if (!vault) return <Frame showVersion><div className="gate" /></Frame>;
-  if (!vault.exists) return <Frame showVersion><VaultSetup onDone={setVault} /></Frame>;
-  if (!vault.unlocked) return <Frame showVersion><VaultUnlock onDone={setVault} /></Frame>;
+  function onVaultOpened(status: VaultStatus) {
+    if (!status.unlocked) return setVault(status);
+    // The window grows to dashboard size at once; the box stays centred and CSS grows it to fill.
+    window.sah.setMainBoxed(false).catch(() => undefined);
+    setExpanded(true);
+    window.setTimeout(() => setVault(status), GROW_MS);
+  }
+
+  if (!vault) return <Frame showVersion boxed><div className="gate" /></Frame>;
+  if (!vault.exists) {
+    return (
+      <Frame showVersion boxed={!expanded}>
+        <VaultSetup onDone={onVaultOpened} />
+      </Frame>
+    );
+  }
+  if (!vault.unlocked) {
+    return (
+      <Frame showVersion boxed={!expanded}>
+        <VaultUnlock onDone={onVaultOpened} />
+      </Frame>
+    );
+  }
   return (
     <Frame showVersion>
-      <Dashboard
-        onLock={async () => {
-          setVault(await window.sah.vaultLock());
-        }}
-      />
+      <Dashboard />
     </Frame>
   );
 }
@@ -48,18 +85,24 @@ function rank(status: ReturnType<typeof displayStatus>): number {
   return 2;
 }
 
-function Dashboard({ onLock }: { onLock: () => void }) {
+function Dashboard() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [now, setNow] = useState(() => new Date());
+  const now = useCooldownClock(accounts);
   // The account whose panel is open in the attached window.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Add-account card: closed by default, with a SteamID tab and a sign-in tab.
+  // The card whose CS2 options menu is open, or null.
+  const [cs2MenuId, setCs2MenuId] = useState<string | null>(null);
+  // Add-account card: closed by default, with a sign-in tab and a create tab.
   const [addOpen, setAddOpen] = useState(false);
-  const [addTab, setAddTab] = useState<"id" | "login" | "create">("id");
-  const [steamId64, setSteamId64] = useState("");
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  // Notification preferences, loaded once. Null until the saved values arrive.
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [addTab, setAddTab] = useState<"login" | "create">("create");
+  // Set while a sign-in runs: shown on the add card in place of the form. Null when idle.
+  const [signingIn, setSigningIn] = useState<string | null>(null);
   // Add-with-login form state.
   const [newLoginName, setNewLoginName] = useState("");
   const [newLoginPassword, setNewLoginPassword] = useState("");
@@ -116,17 +159,25 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     const offProgress = window.sah.onCooldownProgress(setProgress);
     // Closing the panel window clears the selection.
     const offPanelClosed = window.sah.onPanelClosed(() => setSelectedId(null));
+    // Results of background tasks, such as the CS2 license request after a signup.
+    const offNotice = window.sah.onNotice((text) => setNotice(text));
     return () => {
       offAccounts();
       offProgress();
       offPanelClosed();
+      offNotice();
     };
   }, []);
 
+  // Closes the CS2 options menu on a click outside it.
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+    if (!cs2MenuId) return;
+    const close = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement).closest(".cs2-menu-wrap")) setCs2MenuId(null);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [cs2MenuId]);
 
   const rows = useMemo(
     () =>
@@ -162,14 +213,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
-  async function addAccount() {
-    const id = steamId64.trim();
-    if (await run(() => window.sah.addAccount({ steamId64: id }))) {
-      setSteamId64("");
-      setAddOpen(false);
-    }
-  }
-
   async function syncFromSteam() {
     if (await run(() => window.sah.importRemembered())) {
       setNotice("Synced accounts from Steam.");
@@ -178,7 +221,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
 
   async function refreshAll() {
     if (await run(() => window.sah.refreshAllCooldowns())) {
-      setNotice("Cooldowns refreshed for accounts with a web session.");
+      setNotice("Cooldowns refreshed for accounts with a saved login.");
     }
   }
 
@@ -191,6 +234,26 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
     setSelectedId(id);
     window.sah.openPanel(id).catch((e) => setError(errorText(e)));
+  }
+
+  // Runs one entry of the CS2 options menu. Import reads Steam's files directly; the others open the window.
+  async function cs2Action(id: string, action: Cs2TabId | "import") {
+    setCs2MenuId(null);
+    setError(null);
+    setNotice(null);
+    if (action !== "import") {
+      window.sah.cs2Open(id, action).catch((e) => setError(errorText(e)));
+      return;
+    }
+    setBusy(true);
+    try {
+      await window.sah.cs2Import(id);
+      setNotice("Imported the current CS2 settings from Steam.");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function signIn(account: Account) {
@@ -226,6 +289,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       return;
     }
     setBusy(true);
+    setSigningIn(SIGNING_IN_MESSAGE);
     try {
       const start = await window.sah.loginStart({
         accountName: newLoginName.trim(),
@@ -248,12 +312,14 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setSigningIn(null);
     }
   }
 
   async function submitNewGuardCode() {
     if (!newLoginGuard) return;
     setBusy(true);
+    setSigningIn("Checking the Steam Guard code...");
     setError(null);
     try {
       await window.sah.loginCode({ pendingId: newLoginGuard.pendingId, code: newGuardCode.trim() });
@@ -262,6 +328,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setSigningIn(null);
     }
   }
 
@@ -271,6 +338,15 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     setSignupUser("");
     setSignupPass("");
     setSignupMessage(null);
+  }
+
+  async function copySignupValue(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`${what} copied.`);
+    } catch (e) {
+      setError(errorText(e));
+    }
   }
 
   // Editing the email hides the mail server fields until the field loses focus again.
@@ -297,10 +373,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
     }
   }
 
-  function copyText(text: string) {
-    navigator.clipboard.writeText(text).catch(() => setError("Could not copy to the clipboard."));
-  }
-
   // Opens Steam's signup page in the chosen mode. The generated credentials are shown,
   // editable, until the signup ends.
   async function openSignup() {
@@ -321,8 +393,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setSignup(creds);
       setSignupUser(creds.username);
       setSignupPass(creds.password);
-      setSignupMessage("Opening Steam's signup page...");
-      if (creds.mode === "browser") copyText(signupEmail.trim());
       if (saveMailChoice && signupMailPassword) {
         const mail = {
           host: signupHost,
@@ -383,6 +453,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
   // the usual Steam Guard step.
   async function finishSignup() {
     setBusy(true);
+    setSigningIn(SIGNING_IN_MESSAGE);
     setError(null);
     setNotice(null);
     try {
@@ -403,16 +474,20 @@ function Dashboard({ onLock }: { onLock: () => void }) {
       setError(errorText(e));
     } finally {
       setBusy(false);
+      setSigningIn(null);
     }
   }
 
-  async function lockVault() {
-    setBusy(true);
+  // Saves one notification preference. The switch changes at once and is reverted if saving fails.
+  async function changeSetting(key: keyof AppSettings, value: boolean) {
+    if (!settings) return;
+    const previous = settings;
+    setSettings({ ...settings, [key]: value });
     try {
-      await window.sah.vaultLock();
-      onLock();
-    } finally {
-      setBusy(false);
+      setSettings(await window.sah.saveSettings({ [key]: value }));
+    } catch (err) {
+      setSettings(previous);
+      setError(errorText(err));
     }
   }
 
@@ -440,33 +515,45 @@ function Dashboard({ onLock }: { onLock: () => void }) {
         <div className="actions">
           <UpdateButton onError={setError} />
           <button
-            className={`icon-btn${refreshing ? " spin" : ""}`}
+            className={`icon-btn labelled${notifyOpen ? " active" : ""}`}
+            title="Notifications"
+            aria-label="Notifications"
+            onClick={() => {
+              setNotifyOpen((open) => !open);
+              if (!settings) window.sah.getSettings().then(setSettings).catch(() => undefined);
+            }}
+          >
+            <Icon name="bell" />
+            <span>Notifications</span>
+          </button>
+          <button
+            className={`icon-btn labelled${refreshing ? " spin" : ""}`}
             title={refreshing ? checkingLabel : "Refresh cooldowns"}
             aria-label="Refresh cooldowns"
             onClick={refreshAll}
             disabled={busy || progress.running}
           >
             <Icon name="refresh" />
+            <span>Refresh cooldowns</span>
           </button>
           <button
-            className={`icon-btn${syncing ? " bob" : ""}`}
+            className={`icon-btn labelled${syncing ? " bob" : ""}`}
             title={syncing ? "Syncing from Steam..." : "Sync from Steam"}
             aria-label="Sync from Steam"
             onClick={syncFromSteam}
             disabled={busy || progress.running}
           >
             <Icon name="download" />
+            <span>Sync from Steam</span>
           </button>
           <button
-            className={`icon-btn${addOpen ? " active" : ""}`}
+            className={`icon-btn labelled${addOpen ? " active" : ""}`}
             title="Add account"
             aria-label="Add account"
             onClick={() => setAddOpen((open) => !open)}
           >
             <Icon name="userPlus" />
-          </button>
-          <button className="icon-btn" title="Lock vault" aria-label="Lock vault" onClick={lockVault} disabled={busy}>
-            <Icon name="lock" />
+            <span>Add account</span>
           </button>
         </div>
       </div>
@@ -515,18 +602,65 @@ function Dashboard({ onLock }: { onLock: () => void }) {
         </div>
       )}
 
+      {notifyOpen && (
+        <section className="add-card" aria-label="Notifications">
+          <p className="muted small">Windows notifications. Both are off until you turn them on.</p>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings?.notifyCooldownEnd ?? false}
+              disabled={!settings}
+              onChange={(e) => changeSetting("notifyCooldownEnd", e.target.checked)}
+            />
+            Notify when a cooldown ends
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings?.notifyCheckFailed ?? false}
+              disabled={!settings}
+              onChange={(e) => changeSetting("notifyCheckFailed", e.target.checked)}
+            />
+            Notify when a cooldown check fails
+          </label>
+        </section>
+      )}
+
       {addOpen && (
-        <section className="add-card">
-          <div className="tabs">
-            <button className={addTab === "id" ? "tab active" : "tab"} onClick={() => setAddTab("id")}>
-              SteamID64
-            </button>
-            <button className={addTab === "login" ? "tab active" : "tab"} onClick={() => setAddTab("login")}>
-              Sign in
-            </button>
-            <button className={addTab === "create" ? "tab active" : "tab"} onClick={() => setAddTab("create")}>
-              Create
-            </button>
+        <section className={`add-card${signingIn ? " busy" : ""}`} aria-busy={signingIn ? true : undefined}>
+          {signingIn && (
+            <div className="busy-overlay" role="status" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />
+              <span>{signingIn}</span>
+            </div>
+          )}
+          <div className="add-head">
+            <div className="tabs">
+              <button className={addTab === "login" ? "tab active" : "tab"} onClick={() => setAddTab("login")}>
+                Sign in
+              </button>
+              <button className={addTab === "create" ? "tab active" : "tab"} onClick={() => setAddTab("create")}>
+                Create
+              </button>
+            </div>
+            {addTab === "create" && !newLoginGuard && !signup && (
+              <div className="seg" role="group" aria-label="Signup window">
+                <button
+                  className={signupMode === "browser" ? "on" : ""}
+                  aria-pressed={signupMode === "browser"}
+                  onClick={() => setSignupMode("browser")}
+                >
+                  In-Browser
+                </button>
+                <button
+                  className={signupMode === "embedded" ? "on" : ""}
+                  aria-pressed={signupMode === "embedded"}
+                  onClick={() => setSignupMode("embedded")}
+                >
+                  Pop-Up Window
+                </button>
+              </div>
+            )}
           </div>
 
           {newLoginGuard ? (
@@ -553,8 +687,14 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <button className="ghost" onClick={() => copyText(signupUser)} disabled={!signupUser}>
-                    Copy
+                  <button
+                    className="ghost icon-only"
+                    title="Copy account name"
+                    aria-label="Copy account name"
+                    disabled={!signupUser}
+                    onClick={() => copySignupValue(signupUser, "Account name")}
+                  >
+                    <Icon name="copy" size={14} />
                   </button>
                 </div>
                 <div className="row">
@@ -565,18 +705,21 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <button className="ghost" onClick={() => copyText(signupPass)} disabled={!signupPass}>
-                    Copy
+                  <button
+                    className="ghost icon-only"
+                    title="Copy password"
+                    aria-label="Copy password"
+                    disabled={!signupPass}
+                    onClick={() => copySignupValue(signupPass, "Password")}
+                  >
+                    <Icon name="copy" size={14} />
                   </button>
                 </div>
-                <p className="muted small">{signupMessage ?? "Working..."}</p>
+                {signupMessage && <p className="warn-text small">{signupMessage}</p>}
                 <div className="row">
                   <button onClick={finishSignup} disabled={busy || !signupUser.trim() || !signupPass}>
-                    <Icon name="check" />
-                    Account created, sign in
-                  </button>
-                  <button className="ghost" onClick={() => copyText(signupEmail.trim())} disabled={busy}>
-                    Copy email
+                    <Icon name="logIn" />
+                    Sign in now
                   </button>
                   <button className="ghost" onClick={cancelSignup} disabled={busy}>
                     Cancel signup
@@ -585,22 +728,6 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               </>
             ) : (
               <>
-                <div className="tabs">
-                  <button
-                    className={signupMode === "browser" ? "tab active" : "tab"}
-                    onClick={() => setSignupMode("browser")}
-                    disabled={!!signup}
-                  >
-                    Default browser
-                  </button>
-                  <button
-                    className={signupMode === "embedded" ? "tab active" : "tab"}
-                    onClick={() => setSignupMode("embedded")}
-                    disabled={!!signup}
-                  >
-                    App window
-                  </button>
-                </div>
                 <div className="row">
                   <input
                     type="email"
@@ -650,52 +777,45 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                       !signupMailUser.trim() ||
                       (!signupMailPassword && !savedMail)
                     }
+                    title="Makes a login, opens Steam's signup, and reads the confirmation email from your mailbox"
                     onClick={openSignup}
                   >
                     <Icon name="userPlus" />
                     Open signup
                   </button>
                 </div>
-                {signupEmailDone && signupKnownPreset?.id === "gmail" && (
-                  <p className="muted small">
-                    Gmail requires an app password (16 characters, needs 2-Step Verification on the account), not your normal Google password.
-                  </p>
-                )}
-                <div className="row">
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={saveMailChoice}
-                      onChange={(e) => setSaveMailChoice(e.target.checked)}
-                    />
-                    Save this mailbox login in the vault (encrypted)
-                  </label>
+                <div className="add-foot">
+                  {savedMail ? (
+                    <span className="chip" title={`Mailbox ${savedMail.email}. The password comes from the vault.`}>
+                      <Icon name="key" size={12} />
+                      Saved mailbox
+                    </span>
+                  ) : (
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={saveMailChoice}
+                        onChange={(e) => setSaveMailChoice(e.target.checked)}
+                      />
+                      Save mailbox in vault
+                    </label>
+                  )}
+                  {signupEmailDone && signupKnownPreset?.id === "gmail" && (
+                    <span
+                      className="muted"
+                      title="Gmail needs a 16-character app password (2-Step Verification must be on), not your Google password"
+                    >
+                      Gmail: app password
+                    </span>
+                  )}
                   {savedMail && (
                     <button className="ghost small" onClick={forgetMail} disabled={busy}>
-                      Forget saved mailbox
+                      Forget
                     </button>
                   )}
                 </div>
-                {savedMail && (
-                  <p className="muted small">Using the saved mailbox {savedMail.email}. The password comes from the vault.</p>
-                )}
               </>
             )
-          ) : addTab === "id" ? (
-            <>
-              <div className="row">
-                <input
-                  placeholder="SteamID64 or steamcommunity.com/profiles/... link"
-                  value={steamId64}
-                  onChange={(e) => setSteamId64(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && steamId64.trim() && !busy && addAccount()}
-                />
-                <button onClick={addAccount} disabled={busy || !steamId64.trim()}>
-                  <Icon name="plus" />
-                  Add
-                </button>
-              </div>
-            </>
           ) : (
             <div className="row">
               <input
@@ -706,7 +826,8 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               />
               <input
                 type="password"
-                placeholder="Password (not stored)"
+                placeholder="Password"
+                title="Not stored. Only a refresh token is kept in the encrypted vault."
                 value={newLoginPassword}
                 onChange={(e) => setNewLoginPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && newLoginName.trim() && newLoginPassword && addWithLogin()}
@@ -718,27 +839,19 @@ function Dashboard({ onLock }: { onLock: () => void }) {
               </button>
             </div>
           )}
-          <p className="muted small">
-            {addTab === "id"
-              ? "Adds an account by its SteamID64 or profile link."
-              : addTab === "create"
-                ? "Generates a username and password, opens Steam's signup page, and watches your mailbox for Steam's confirmation email, then opens its link. You fill the form, solve the CAPTCHA, and choose to create a new account."
-                : "The password is not stored. Only a refresh token is kept in the encrypted vault."}
-          </p>
         </section>
       )}
 
       {rows.length === 0 ? (
         <div className="empty">
-          <Icon name="monitor" size={28} />
-          <p>No accounts yet. Use Sync from Steam or add one by SteamID64.</p>
+          <p>No accounts yet. Sync from Steam or add an account.</p>
         </div>
       ) : (
         <div className="grid">
           {rows.map(({ account, status }) => (
             <article
               key={account.id}
-              className={`card ${status.kind} ${account.id === selectedId ? "selected" : ""}`}
+              className={`card ${status.kind}${account.id === selectedId ? " selected" : ""}${cs2MenuId === account.id ? " menu-open" : ""}`}
               onClick={() => openAccount(account.id)}
             >
               <div className="card-head">
@@ -747,7 +860,7 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   <span className="name">{account.displayName}</span>
                   <span className="sid">{account.steamId64}</span>
                 </div>
-                <Pill status={status} now={now} />
+                <Pill status={status} />
               </div>
               <div className="card-foot">
                 <Badge
@@ -768,12 +881,30 @@ function Dashboard({ onLock }: { onLock: () => void }) {
                   state={account.loginSaved ? "on" : "off"}
                   title={account.loginSaved ? "Saved login in the vault" : "No saved login"}
                 />
-                <Badge
-                  icon="globe"
-                  label="Web"
-                  state={account.webSignedIn ? "on" : "off"}
-                  title={account.webSignedIn ? "Web session saved" : "No web session"}
-                />
+                <div className="cs2-menu-wrap" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className={`icon-btn small${cs2MenuId === account.id ? " active" : ""}`}
+                    title="CS2 options"
+                    aria-label="CS2 options"
+                    aria-haspopup="menu"
+                    aria-expanded={cs2MenuId === account.id}
+                    onClick={() => setCs2MenuId(cs2MenuId === account.id ? null : account.id)}
+                  >
+                    <Icon name="settings" size={15} />
+                  </button>
+                  {cs2MenuId === account.id && (
+                    <div className="cs2-menu" role="menu">
+                      <button role="menuitem" onClick={() => cs2Action(account.id, "video")}>
+                        <Icon name="settings" size={13} />
+                        CS2 settings
+                      </button>
+                      <button role="menuitem" onClick={() => cs2Action(account.id, "import")} disabled={busy}>
+                        <Icon name="download" size={13} />
+                        Import from Steam
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   className="ghost small sign-in"
                   disabled={busy || !!signInBlock(account)}

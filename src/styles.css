@@ -58,7 +58,8 @@ body {
   user-select: none;
 }
 input,
-textarea {
+textarea,
+code {
   user-select: text;
 }
 
@@ -83,15 +84,31 @@ textarea {
 /* Window frame: slim title bar on top, content fills the rest */
 /* The whole window (box and content) is wiped in from left to right on launch. Frame in
    shared.tsx animates clip-path; closing reverses it. Hidden until the wipe starts. */
+/* The window is always full size; "boxed" shrinks the frame to a centred box (the vault screens).
+   Removing "boxed" grows it to the full window with a CSS transition, so the OS window never resizes. */
 .window {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
-  height: 100vh;
   /* Glow spans the full width of the top half of the window */
   background: radial-gradient(ellipse 100% 55% at 50% 0%, #1a1330 0%, var(--bg) 100%);
   border: 1px solid var(--line);
   clip-path: inset(0 100% 0 0);
+  transition:
+    left 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    top 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    width 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    height 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.window.boxed {
+  left: calc(50% - 320px);
+  top: calc(50% - 220px);
+  width: 640px;
+  height: 440px;
 }
 /* Tint layer under the title bar and content; the activity color sits on top of the base glow */
 .window::before {
@@ -135,6 +152,11 @@ textarea {
 }
 .titlebar.locked {
   -webkit-app-region: no-drag;
+}
+/* Attached window title bar: dragged by pointer, moves the whole group (see Frame in shared.tsx) */
+.titlebar.group-drag {
+  -webkit-app-region: no-drag;
+  touch-action: none;
 }
 .titlebar-brand {
   display: flex;
@@ -223,6 +245,7 @@ textarea {
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -241,7 +264,7 @@ textarea {
   border: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
-  backdrop-filter: blur(10px);
+
 }
 .count b {
   color: var(--text);
@@ -260,6 +283,8 @@ textarea {
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 .icon-btn {
@@ -274,7 +299,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   font-weight: 500;
-  backdrop-filter: blur(10px);
+
 }
 .icon-btn:hover:not(:disabled) {
   background: var(--raised-hover);
@@ -284,6 +309,14 @@ textarea {
 .icon-btn.active {
   color: var(--accent);
   border-color: var(--accent);
+}
+/* Toolbar buttons with a text label beside the icon */
+.icon-btn.labelled {
+  width: auto;
+  padding: 0 12px;
+  gap: 7px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 .icon-btn.small {
   width: 24px;
@@ -420,6 +453,7 @@ textarea {
 
 /* Add-account card */
 .add-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -427,7 +461,35 @@ textarea {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
-  backdrop-filter: blur(10px);
+
+}
+/* Sign-in in progress: the form dims and ignores input under a spinner. */
+.add-card.busy > :not(.busy-overlay) {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.busy-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-radius: 12px;
+  background: rgba(11, 13, 19, 0.55);
+  color: var(--text);
+  font-size: 13px;
+  cursor: progress;
+}
+.spinner {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
 }
 .tabs {
   display: flex;
@@ -448,6 +510,66 @@ textarea {
 .tab.active {
   color: var(--text);
   background: var(--raised-hover);
+}
+.add-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Segmented switch: signup window type */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+}
+.seg button {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+}
+.seg button:hover:not(:disabled) {
+  color: var(--text);
+  filter: none;
+}
+.seg button.on {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+/* Footer row under the mailbox fields: one line of status and actions */
+.add-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  font-size: 12px;
+}
+.add-foot .check {
+  font-size: 12px;
+}
+.add-foot > button {
+  margin-left: auto;
+}
+/* Square icon button, e.g. copy next to a generated value */
+button.icon-only {
+  padding: 7px 9px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.14);
+  color: var(--accent);
+  font-size: 12px;
 }
 .row {
   display: flex;
@@ -531,7 +653,7 @@ textarea {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
-  backdrop-filter: blur(10px);
+
   cursor: pointer;
   transition:
     border-color 0.15s ease,
@@ -543,6 +665,11 @@ textarea {
 }
 .card.selected {
   border-color: var(--accent);
+}
+/* An open CS2 menu floats above the cards below it. */
+.card.menu-open {
+  position: relative;
+  z-index: 30;
 }
 /* Status shows as a thin top edge rather than a side stripe */
 .card.blocked {
@@ -587,6 +714,46 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+/* CS2 options: gear button with a small menu below it. */
+.cs2-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.cs2-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 170px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+}
+.cs2-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+.cs2-menu button:hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.cs2-menu button:disabled {
+  opacity: 0.5;
 }
 
 .badge {
@@ -683,10 +850,24 @@ textarea {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 14px;
   border-left: 1px solid var(--line);
   background: rgba(11, 13, 19, 0.6);
+  overflow-x: hidden;
+}
+/* Rows wrap instead of pushing buttons past the panel edge */
+.panel .row {
+  flex-wrap: wrap;
+}
+.panel .row code {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.panel .sec {
+  padding: 10px 12px;
+  gap: 6px;
 }
 /* Notices float over the top of the panel. In the flow they pushed the sections down and
    added a scrollbar to the panel. */
@@ -710,6 +891,30 @@ textarea {
   flex-direction: column;
   min-width: 0;
 }
+/* SteamID64 under the name in the panel: looks like the card's .sid text, and copies on click. */
+.sid-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+button.sid-value {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  user-select: text;
+}
+button.sid-value:hover {
+  color: var(--text);
+}
+.sid-copy .icon-btn.small {
+  width: 20px;
+  height: 20px;
+}
 .panel h2 {
   margin: 0;
   font-size: 17px;
@@ -726,7 +931,7 @@ textarea {
   border-radius: 12px;
   background: var(--surface);
   border: 1px solid var(--line);
-  backdrop-filter: blur(10px);
+
 }
 .cooldown-box.blocked {
   border-color: rgba(245, 165, 36, 0.4);
@@ -762,7 +967,7 @@ textarea {
   border-radius: 12px;
   background: var(--surface);
   border: 1px solid var(--line);
-  backdrop-filter: blur(10px);
+
 }
 .sec-head {
   display: flex;
@@ -776,16 +981,19 @@ textarea {
 }
 .panel-footer {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
   padding-top: 4px;
 }
 .panel-footer button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 7px 8px;
 }
 
 /* Form controls */
@@ -886,7 +1094,8 @@ p {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 18px;
+  overflow-y: auto;
 }
 .gate-card {
   width: 100%;
@@ -894,7 +1103,7 @@ p {
   background: var(--surface-solid);
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 26px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -928,7 +1137,130 @@ p {
   font-size: 13px;
 }
 
-/* CS2 settings section (AccountPanel.tsx) */
+/* CS2 settings window, attached across the top of the main window (Cs2Window.tsx) */
+.cs2-window {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  background: rgba(11, 13, 19, 0.6);
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+}
+.cs2-window > .banner {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.cs2-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.cs2-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.cs2-title b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs2-select {
+  min-width: 240px;
+  max-width: 300px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.cs2-inline-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 480px;
+  font-size: 12px;
+}
+.cs2-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.cs2-filter {
+  width: 240px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.cs2-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.cs2-group + .cs2-group {
+  margin-top: 12px;
+}
+.cs2-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+.cs2-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 6px 14px;
+}
+.cs2-setting {
+  display: grid;
+  grid-template-columns: 1fr 150px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.cs2-setting > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cs2-setting input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cs2-setting.edited > span {
+  color: var(--text);
+}
+.cs2-setting.edited input {
+  border-color: var(--warn);
+}
+.cs2-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.cs2-body .cs2-binds {
+  max-height: none;
+}
+
+/* CS2 shared styles: confirmations and the keybind list */
 .cs2-confirm {
   display: flex;
   flex-direction: column;
@@ -979,4 +1311,26 @@ p {
   padding: 3px 0;
   border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere;
+}
+.cs2-binds li.cs2-bind {
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+}
+.cs2-bind-key {
+  font-weight: 600;
+}
+.cs2-bind.edited .cs2-bind-key {
+  color: var(--accent);
+}
+.cs2-bind input,
+.cs2-bind-add input {
+  min-width: 0;
+  padding: 4px 8px;
+  font: inherit;
+}
+.cs2-bind-add {
+  display: grid;
+  grid-template-columns: 140px 1fr auto;
+  gap: 8px;
+  margin-top: 10px;
 }

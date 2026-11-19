@@ -124,6 +124,85 @@ test("readBindings returns the keybinds of a snapshot and rejects bad IDs", () =
   assert.throws(() => cs2.readBindings(storeRoot, steamId, "..\\..\\secret"), /Unknown backup/);
 });
 
+const CONVARS = `"config"
+{
+	"convars"
+	{
+		"cl_crosshair_gap"		"2"
+		"cl_crosshair_length"		"11"
+		"cl_quote"		"a"
+	}
+}
+`;
+
+const VIDEO = `"video.cfg"
+{
+	"Version"		"16"
+	"setting.fullscreen"		"0"
+	"setting.mat_vsync"		"0"
+}
+`;
+
+test("readSettings lists the video settings and convars of a snapshot", () => {
+  const steamId = "76561198188880847";
+  const steamRoot = makeSteam(steamId, { "cs2_user_convars_0_slot0.vcfg": CONVARS, "cs2_video.txt": VIDEO });
+  const storeRoot = tempStore();
+  const meta = cs2.createSnapshot({ steamRoot, storeRoot, steamId64: steamId });
+  const settings = cs2.readSettings(storeRoot, steamId, meta.id);
+  assert.deepEqual(settings.convars[0], { key: "cl_crosshair_gap", value: "2" });
+  assert.equal(settings.convars.length, 3);
+  // Version is not a setting the app changes.
+  assert.deepEqual(settings.video, [
+    { key: "setting.fullscreen", value: "0" },
+    { key: "setting.mat_vsync", value: "0" },
+  ]);
+});
+
+test("saveSettings writes a new snapshot and leaves the source and other lines unchanged", () => {
+  const steamId = "76561198188880847";
+  const steamRoot = makeSteam(steamId, { "cs2_user_convars_0_slot0.vcfg": CONVARS, "cs2_video.txt": VIDEO });
+  const storeRoot = tempStore();
+  const source = cs2.createSnapshot({ steamRoot, storeRoot, steamId64: steamId, now: new Date("2026-11-15T10:00:00.000Z") });
+  const saved = cs2.saveSettings({
+    storeRoot,
+    steamId64: steamId,
+    snapshotId: source.id,
+    changes: { convars: { cl_crosshair_gap: "5", cl_quote: 'say "hi"\\' }, video: { "setting.mat_vsync": "1" } },
+    now: new Date("2026-11-16T10:00:00.000Z"),
+  });
+
+  assert.equal(saved.basedOn, source.id);
+  assert.equal(saved.changedSettings, 3);
+  const after = cs2.readSettings(storeRoot, steamId, saved.id);
+  assert.equal(after.convars.find((s) => s.key === "cl_crosshair_gap").value, "5");
+  assert.equal(after.convars.find((s) => s.key === "cl_quote").value, 'say "hi"\\');
+  assert.equal(after.convars.find((s) => s.key === "cl_crosshair_length").value, "11");
+  assert.equal(after.video.find((s) => s.key === "setting.mat_vsync").value, "1");
+
+  // The original backup keeps its values.
+  const original = cs2.readSettings(storeRoot, steamId, source.id);
+  assert.equal(original.convars.find((s) => s.key === "cl_crosshair_gap").value, "2");
+  assert.equal(original.video.find((s) => s.key === "setting.mat_vsync").value, "0");
+  // The Video line keeps its tabs, so the file stays in Steam's layout.
+  const savedText = fs.readFileSync(path.join(storeRoot, steamId, saved.id, "cs2_video.txt"), "utf8");
+  assert.match(savedText, /\t"setting\.mat_vsync"\t\t"1"/);
+});
+
+test("saveSettings rejects unknown keys, long or multi-line values, and no-op saves", () => {
+  const steamId = "76561198188880847";
+  const steamRoot = makeSteam(steamId, { "cs2_user_convars_0_slot0.vcfg": CONVARS });
+  const storeRoot = tempStore();
+  const source = cs2.createSnapshot({ steamRoot, storeRoot, steamId64: steamId });
+  const save = (changes) => cs2.saveSettings({ storeRoot, steamId64: steamId, snapshotId: source.id, changes });
+  assert.throws(() => save({ convars: { not_a_convar: "1" } }), /Unknown setting/);
+  assert.throws(() => save({ convars: { cl_crosshair_gap: "1\n2" } }), /Invalid value/);
+  assert.throws(() => save({ convars: { cl_crosshair_gap: "x".repeat(201) } }), /Invalid value/);
+  assert.throws(() => save({ convars: { cl_crosshair_gap: "2" } }), /Nothing changed/);
+  assert.throws(() => save({ cfgfile: { a: "1" } }), /Unknown settings group/);
+  assert.throws(() => cs2.readSettings(storeRoot, steamId, "..\\..\\secret"), /Unknown backup/);
+  assert.equal(cs2.listSnapshots(storeRoot, steamId).length, 1);
+});
+
 test("removeStore deletes all snapshots for the account", () => {
   const steamId = "76561198188880847";
   const steamRoot = makeSteam(steamId, { "cs2_user_keys_0_slot0.vcfg": KEYS });
@@ -131,4 +210,59 @@ test("removeStore deletes all snapshots for the account", () => {
   cs2.createSnapshot({ steamRoot, storeRoot, steamId64: steamId });
   cs2.removeStore(storeRoot, steamId);
   assert.equal(fs.existsSync(path.join(storeRoot, steamId)), false);
+});
+
+test("writeToSteam edits Steam's files and keeps a backup of the previous state", () => {
+  const id = "76561198188880847";
+  const video = '"Video"\n{\n\t"setting.fps_max"\t\t"0"\n}\n';
+  const steamRoot = makeSteam(id, { "cs2_video.txt": video, "cs2_user_keys_0_slot0.vcfg": KEYS });
+  const store = tempStore();
+  const result = cs2.writeToSteam({
+    steamRoot,
+    storeRoot: store,
+    steamId64: id,
+    changes: { video: { "setting.fps_max": "300" } },
+  });
+  assert.equal(result.changedCount, 1);
+  assert.ok(result.backupId, "a backup is created before writing");
+  const cfg = path.join(steamRoot, "userdata", cs2.accountIdFor(id), "730", "local", "cfg");
+  const written = fs.readFileSync(path.join(cfg, "cs2_video.txt"), "utf8");
+  assert.match(written, /"setting\.fps_max"\t\t"300"/);
+  assert.equal(fs.readFileSync(path.join(cfg, "cs2_user_keys_0_slot0.vcfg"), "utf8"), KEYS);
+  const backed = fs.readFileSync(path.join(store, id, result.backupId, "cs2_video.txt"), "utf8");
+  assert.equal(backed, video);
+});
+
+test("writeToSteam refuses an unknown setting and writes nothing", () => {
+  const id = "76561198188880847";
+  const video = '"Video"\n{\n\t"setting.fps_max"\t\t"0"\n}\n';
+  const steamRoot = makeSteam(id, { "cs2_video.txt": video });
+  assert.throws(
+    () => cs2.writeToSteam({ steamRoot, storeRoot: tempStore(), steamId64: id, changes: { video: { "setting.nope": "1" } } }),
+    /Unknown setting/,
+  );
+  const cfg = path.join(steamRoot, "userdata", cs2.accountIdFor(id), "730", "local", "cfg");
+  assert.equal(fs.readFileSync(path.join(cfg, "cs2_video.txt"), "utf8"), video);
+});
+
+test("writeToSteam changes an existing keybind and adds a new one inside the bindings block", () => {
+  const id = "76561198188880847";
+  const steamRoot = makeSteam(id, { "cs2_user_keys_0_slot0.vcfg": KEYS });
+  const store = tempStore();
+  const result = cs2.writeToSteam({
+    steamRoot,
+    storeRoot: store,
+    steamId64: id,
+    changes: { bindings: { g: "+jump", F5: "toggleconsole" } },
+  });
+  assert.equal(result.changedCount, 2);
+  const cfg = path.join(steamRoot, "userdata", cs2.accountIdFor(id), "730", "local", "cfg");
+  const written = fs.readFileSync(path.join(cfg, "cs2_user_keys_0_slot0.vcfg"), "utf8");
+  assert.match(written, /"g"\t\t"\+jump"/);
+  assert.match(written, /\t\t"F5"\t\t"toggleconsole"\n\t\}\n\}/);
+  assert.deepEqual(
+    cs2.bindingsFromKeys(written).find((bind) => bind.key === "F5"),
+    { key: "F5", command: "toggleconsole" },
+  );
+  assert.ok(result.backupId);
 });

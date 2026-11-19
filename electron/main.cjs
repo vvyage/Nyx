@@ -1,13 +1,18 @@
-const { app, BrowserWindow, ipcMain, Menu, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Notification, screen } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const { execFileSync } = require("node:child_process");
 const steamClient = require("./steamClient.cjs");
 const cooldownFetcher = require("./cooldownFetcher.cjs");
 const steamAuth = require("./steamAuth.cjs");
 const signupHelper = require("./signupHelper.cjs");
 const signupUtils = require("./signupUtils.cjs");
 const cs2Config = require("./cs2Config.cjs");
+const settingsStore = require("./settings.cjs");
+const SteamUser = require("steam-user");
+const { createFreeLicenseRequester } = require("./freeLicense.cjs");
+const { findEndedCooldowns } = require("./notifyRules.cjs");
 const { createTokenVault } = require("./tokenVault.cjs");
 const { parseSteamIdInput, fetchProfileSummary } = require("./steamProfile.cjs");
 const { autoUpdater } = require("electron-updater");
@@ -27,13 +32,63 @@ function tokenVault() {
 }
 
 const iconPath = path.join(__dirname, "..", "src", "assets", "logo.png");
+// Windows taskbar icons come from a real .ico; a PNG is not reliably used and Electron's logo shows instead.
+const windowIconPath = path.join(__dirname, "..", "src", "assets", "logo.ico");
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 const AUTO_REFRESH_FIRST_MS = 5 * 1000;
 const ACTIVE_POLL_MS = 10 * 1000;
+const COOLDOWN_CHECK_MS = 60 * 1000;
 
 // Only parsed results are stored: no HTML, passwords, cookies, or tokens.
 const storePath = () => path.join(app.getPath("userData"), "accounts.json");
 const cs2StorePath = () => path.join(app.getPath("userData"), "cs2-configs");
+const settingsPath = () => path.join(app.getPath("userData"), "settings.json");
+
+// Cooldown endings are announced only if they happen after this moment.
+const sessionStartMs = Date.now();
+// Keys ("accountId|expiresAt") of cooldown endings already handled this session.
+const announcedEndings = new Set();
+
+// Shows a Windows notification. Clicking it brings the main window forward.
+function notify(title, body) {
+  if (!Notification.isSupported()) return;
+  // Without an explicit icon, Windows shows Electron's default logo in dev builds.
+  const note = new Notification({ title, body, icon: iconPath });
+  note.on("click", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  note.show();
+}
+
+// Finds cooldowns that ended since the last check. The endings are tracked even when the
+// setting is off, so enabling it later does not announce old endings.
+function checkCooldownEndings() {
+  const ended = findEndedCooldowns(loadAccounts(), {
+    sessionStartMs,
+    nowMs: Date.now(),
+    announced: announcedEndings,
+  });
+  if (!settingsStore.loadSettings(settingsPath()).notifyCooldownEnd) return;
+  for (const account of ended) {
+    notify("Cooldown ended", `${account.name || account.steamId64} can queue for matchmaking again.`);
+  }
+}
+
+// Reason last announced per account id. A failure is announced once; it is announced again
+// only after a successful read or when the reason changes.
+const announcedFailures = new Map();
+
+// Announces a failed read, when the user has asked for that. The reason never contains secrets.
+function reportCheckFailure(accountId, label, reason) {
+  const text = String(reason).slice(0, 160);
+  if (announcedFailures.get(accountId) === text) return;
+  announcedFailures.set(accountId, text);
+  if (!settingsStore.loadSettings(settingsPath()).notifyCheckFailed) return;
+  notify("Cooldown check failed", `${label}: ${text}`);
+}
 
 // Whether Steam has CS2 settings for the account on this PC, plus the stored backups.
 async function cs2Summary(account) {
@@ -86,9 +141,13 @@ async function viewAccounts(accounts) {
               rememberPassword: steam.rememberPassword,
             }
           : null,
-        webSignedIn: await cooldownFetcher.isWebSignedIn(account.steamId64),
         // True when a refresh token for this account is stored in the vault.
         loginSaved: account.tokenSaved === true,
+        // The Steam login name saved with the login. Used when Steam does not list the account here.
+        loginName: tokenVault().isUnlocked() ? tokenVault().getAccountName(account.steamId64) : null,
+        // True when a password is stored in the vault. Accounts saved before passwords were
+        // kept have none until Save login runs again.
+        passwordSaved: tokenVault().isUnlocked() && tokenVault().getPassword(account.steamId64) !== null,
       };
     }),
   );
@@ -225,32 +284,18 @@ async function prepareSavedLogin(account) {
   }
 }
 
-// Results that mean the persisted web session was not accepted. Only these trigger a
-// saved-login sign-in, so a working session is not replaced on every refresh.
-function needsSavedLogin(result) {
-  return (
-    result.status === "unknown" &&
-    /^(Steam showed the profile page|Steam web session expired)/.test(result.reason)
-  );
-}
-
-// Reads one account. First tries the persisted web session as-is. Only when that is
-// missing or rejected does it apply the saved login. Returns null when an automatic run
-// should skip the account quietly (vault locked); a manual run gets the reason.
+// Reads one account: applies its saved login, then reads the matchmaking page. Accounts
+// without a saved login cannot be read. Returns null when an automatic run should skip the
+// account quietly (vault locked); a manual run gets the reason.
 // step(text) reports each stage to the progress panel.
 async function readAccountCooldown(account, manual, step = () => {}) {
-  if (await cooldownFetcher.isWebSignedIn(account.steamId64)) {
-    step("reading the matchmaking page with the saved web session");
-    const current = await cooldownFetcher.readCooldownPage(account.steamId64);
-    if (!account.tokenSaved || !needsSavedLogin(current)) return current;
-    step("the web session was not accepted");
+  if (!account.tokenSaved) {
+    return manual ? { status: "unknown", expiresAt: null, reason: "No saved login. Save the login first." } : null;
   }
-  if (account.tokenSaved) {
-    step("applying the saved login");
-    const failure = await prepareSavedLogin(account);
-    if (failure) {
-      return manual ? { status: "unknown", expiresAt: null, reason: failure } : null;
-    }
+  step("applying the saved login");
+  const failure = await prepareSavedLogin(account);
+  if (failure) {
+    return manual ? { status: "unknown", expiresAt: null, reason: failure } : null;
   }
   step("reading the matchmaking page");
   return cooldownFetcher.readCooldownPage(account.steamId64);
@@ -285,20 +330,24 @@ function addProgressLog(text) {
   setRefreshProgress({ log: [...refreshProgress.log, `${time}  ${text}`].slice(-PROGRESS_LOG_LIMIT) });
 }
 
-// Reads the matchmaking page for every account with a saved login or web session, one
+// Reads the matchmaking page for every account with a saved login, one
 // at a time. Runs are serialized so the auto timer and a manual click never overlap.
 function refreshCooldowns(onlyId = null) {
   if (syncRunning) return Promise.reject(new Error("Wait for the Steam sync to finish."));
-  if (refreshRunning) return refreshRunning;
+  // A single-account check queues a new run after the active one. Joining the active run
+  // could miss the account if that run already passed it.
+  if (refreshRunning) {
+    if (!onlyId) return refreshRunning;
+    const after = () => refreshCooldowns(onlyId);
+    return refreshRunning.then(after, after);
+  }
   refreshRunning = (async () => {
     // Decide the work list first so the progress total is known up front.
     const targets = [];
     for (const account of loadAccounts()) {
       if (onlyId && account.id !== onlyId) continue;
-      const signedIn = await cooldownFetcher.isWebSignedIn(account.steamId64);
-      // Automatic runs skip accounts with neither a saved login nor a web session;
-      // a manual check reports why.
-      if (!signedIn && !account.tokenSaved && !onlyId) continue;
+      // Automatic runs skip accounts without a saved login; a manual check reports why.
+      if (!account.tokenSaved && !onlyId) continue;
       targets.push(account);
     }
     setRefreshProgress({
@@ -307,7 +356,7 @@ function refreshCooldowns(onlyId = null) {
       done: 0,
       total: targets.length,
       currentName: null,
-      phase: targets.length ? "Starting" : "No accounts have a saved login or web session",
+      phase: targets.length ? "Starting" : "No accounts have a saved login",
       log: [],
     });
 
@@ -323,6 +372,8 @@ function refreshCooldowns(onlyId = null) {
         if (result) {
           storePageResult(account.id, result);
           addProgressLog(`${label}: ${describeResult(result)}`);
+          if (result.status === "unknown") reportCheckFailure(account.id, label, result.reason);
+          else announcedFailures.delete(account.id);
         } else {
           addProgressLog(`${label}: skipped, vault is locked`);
         }
@@ -334,6 +385,7 @@ function refreshCooldowns(onlyId = null) {
           reason: `Page read failed: ${reason}`,
         });
         addProgressLog(`${label}: read failed`);
+        reportCheckFailure(account.id, label, `Page read failed: ${reason}`);
       }
       setRefreshProgress({ done: refreshProgress.done + 1 });
       notifyRenderer();
@@ -439,9 +491,15 @@ function registerIpc() {
       }
       tokenVault().removeToken(removed.steamId64);
     }
-    if (removed) cs2Config.removeStore(cs2StorePath(), removed.steamId64);
+    if (removed) {
+      cs2Config.removeStore(cs2StorePath(), removed.steamId64);
+      // Drops the account's Steam cookies from the app's session storage.
+      await cooldownFetcher.forgetSession(removed.steamId64).catch(() => {});
+    }
     const remaining = accounts.filter((item) => item.id !== id);
     saveAccounts(remaining);
+    // The removal may come from the panel window; the main window must drop the card too.
+    notifyRenderer();
     return respond(remaining);
   });
 
@@ -461,6 +519,41 @@ function registerIpc() {
   ipcMain.handle("cs2:view", (_event, id, snapshotId) => {
     const account = requireAccount(loadAccounts(), requireString(id, "Account"));
     return cs2Config.readBindings(cs2StorePath(), account.steamId64, requireString(snapshotId, "Backup", 40));
+  });
+
+  // Editable settings (video and convars) of one backup.
+  ipcMain.handle("cs2:settings", (_event, id, snapshotId) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    return cs2Config.readSettings(cs2StorePath(), account.steamId64, requireString(snapshotId, "Backup", 40));
+  });
+
+  // Saves edits as a new backup. Steam's files are not changed. Returns the new backup's ID.
+  ipcMain.handle("cs2:saveSettings", async (_event, id, snapshotId, changes) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    const meta = cs2Config.saveSettings({
+      storeRoot: cs2StorePath(),
+      steamId64: account.steamId64,
+      snapshotId: requireString(snapshotId, "Backup", 40),
+      changes,
+    });
+    return { state: await cs2Summary(account), snapshotId: meta.id };
+  });
+
+  // Writes the edits into Steam's own CS2 files. Refused while Steam runs: a running client
+  // can overwrite the files or upload its copy to Steam Cloud. Returns the backup made first.
+  ipcMain.handle("cs2:applyToSteam", async (_event, id, changes) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    if (await steamClient.isSteamRunning()) {
+      throw new Error("Close Steam first. A running Steam can overwrite these files or upload its own copy.");
+    }
+    const steamRoot = await steamClient.steamDir();
+    const result = cs2Config.writeToSteam({
+      steamRoot,
+      storeRoot: cs2StorePath(),
+      steamId64: account.steamId64,
+      changes,
+    });
+    return { state: await cs2Summary(account), backupId: result.backupId, changedCount: result.changedCount };
   });
 
   ipcMain.handle("vault:status", async () => tokenVault().status());
@@ -486,9 +579,11 @@ function registerIpc() {
     steamAuth.cancelAllPending();
     signupHelper.cancel();
     closePanel();
+    closeCs2();
     tokenVault().lock();
     loginDrafts.clear();
     pendingSignupLogin = null;
+    pendingLogins.clear();
     return tokenVault().status();
   });
 
@@ -501,6 +596,8 @@ function registerIpc() {
     const password = requireString(input && input.password, "Password", 200);
     const since = Date.now() - signupHelper.STEAM_CODE_LOOKBACK_MS;
     const start = await steamAuth.startLogin(accountName, password);
+    // Kept in memory until login:finish saves it to the vault with the token.
+    pendingLogins.set(start.pendingId, { accountName, password });
     // When Steam emails a code and a mailbox is saved, the code is read from it here.
     const fromMail = await signupHelper.submitEmailCodeIfNeeded(start, tokenVault().getMailSettings(), since);
     return { ...start, ...fromMail };
@@ -518,7 +615,12 @@ function registerIpc() {
   ipcMain.handle("login:finish", async (_event, input) => {
     const accountId = input && input.accountId ? requireString(input.accountId, "Account") : null;
     if (accountId) requireAccount(loadAccounts(), accountId);
-    const result = await steamAuth.finishLogin(requireString(input && input.pendingId, "Sign-in"));
+    const pendingId = requireString(input && input.pendingId, "Sign-in");
+    const result = await steamAuth.finishLogin(pendingId);
+    // The login typed for this sign-in, or the one generated by signup for its sign-in.
+    const login = takePendingLogin(pendingId);
+    const password = login ? login.password : null;
+    const loginName = login ? login.accountName : null;
     if (!tokenVault().isUnlocked()) {
       throw new Error("Vault was locked during sign-in. Unlock it and try again.");
     }
@@ -543,7 +645,10 @@ function registerIpc() {
         message = "Account added and login saved.";
       }
     }
-    tokenVault().saveToken(result.steamId64, result.refreshToken);
+    tokenVault().saveToken(result.steamId64, result.refreshToken, password, loginName);
+    // Credentials of the signup this sign-in completes, if it is one.
+    const signupLogin =
+      !accountId && pendingSignupLogin && pendingSignupLogin.pendingId === input.pendingId ? pendingSignupLogin : null;
     // A manual save from the panel replaces the draft. A sign-in from the signup flow fills
     // the new account's panel with the generated login.
     if (accountId) {
@@ -555,9 +660,18 @@ function registerIpc() {
     updateAccount(targetId, (item) => {
       item.tokenSaved = true;
     });
-    // Read the new account's cooldown right away, as "Check now" does. A read failure is
-    // stored on the account by refreshCooldowns and must not fail the saved login.
-    await refreshCooldowns(targetId).catch(() => {});
+    // A new signup account gets the free CS2 license so it can play. The request waits for a Steam
+    // Guard email (up to 90 s), so it runs in the background. Its outcome is sent as a notice.
+    if (signupLogin) {
+      requestSignupLicense(signupLogin, result.steamId64)
+        .then((note) => sendToWindows("app:notice", note))
+        .catch((error) => console.warn(`[license] ${error.message}`));
+    }
+    // Read the account's cooldown in the background, as "Check now" does. The page read can take
+    // a minute or more, so the sign-in does not wait for it. The result arrives through the
+    // progress banner and accounts:changed. A read failure is stored on the account by
+    // refreshCooldowns and never fails the saved login.
+    refreshCooldowns(targetId).catch(() => {});
     return { message, accounts: await respond(loadAccounts()) };
   });
 
@@ -568,17 +682,10 @@ function registerIpc() {
     return respond(loadAccounts());
   });
 
-  // Reads the page for every account that has a web session.
+  // Reads the page for every account that has a saved login.
   ipcMain.handle("accounts:refreshAll", async () => {
     await refreshCooldowns();
     return respond(loadAccounts());
-  });
-
-  // Opens Steam's web login for one account, then reports whether it was saved.
-  ipcMain.handle("accounts:webSignIn", async (_event, id) => {
-    const account = requireAccount(loadAccounts(), id);
-    const result = await cooldownFetcher.signInWeb(account.steamId64);
-    return { message: result.message, accounts: await respond(loadAccounts()) };
   });
 
   // Manual fallback: the renderer sends an absolute UTC ISO string.
@@ -645,6 +752,26 @@ function registerIpc() {
     return { ok: true };
   });
 
+  // Newest Steam Guard code in the saved mailbox, from the last 15 minutes. Read on demand only.
+  ipcMain.handle("mail:guardCode", async () => {
+    if (!tokenVault().isUnlocked()) throw new Error("Unlock the vault first.");
+    const mail = tokenVault().getMailSettings();
+    if (!mail) throw new Error("No mailbox saved. Save it in the Add card's Create tab first.");
+    const code = await signupHelper.latestGuardCode(mail, 15 * 60 * 1000);
+    return code
+      ? { code, note: "Newest Steam Guard code from the last 15 minutes. Check it is for the right sign-in." }
+      : { code: null, note: "No Steam Guard email from the last 15 minutes." };
+  });
+
+  // The stored password for an account, sent only when the user asks to see it.
+  ipcMain.handle("accounts:password", async (_event, id) => {
+    if (!tokenVault().isUnlocked()) throw new Error("Unlock the vault first.");
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    const password = tokenVault().getPassword(account.steamId64);
+    if (password === null) throw new Error("No password is stored for this account. Save login with its password.");
+    return { password };
+  });
+
   // Login details to fill into an account's Saved login section, or null.
   ipcMain.handle("accounts:loginDraft", async (_event, id) => {
     if (!tokenVault().isUnlocked()) return null;
@@ -673,6 +800,22 @@ function registerIpc() {
     return { ok: true };
   });
 
+  // User preferences (notifications). Only known boolean keys are accepted.
+  ipcMain.handle("settings:get", () => settingsStore.loadSettings(settingsPath()));
+  ipcMain.handle("settings:save", (_event, change) => {
+    const before = settingsStore.loadSettings(settingsPath());
+    const safe = {};
+    for (const key of Object.keys(settingsStore.DEFAULTS)) {
+      if (change && typeof change[key] === "boolean") safe[key] = change[key];
+    }
+    const saved = settingsStore.saveSettings(settingsPath(), safe);
+    // Confirms when a notification type is switched on, so the user can see it works.
+    if (Object.keys(settingsStore.DEFAULTS).some((key) => safe[key] === true && !before[key])) {
+      notify("Notifications are now active", "Nyx will show a Windows notice for the alerts you have turned on.");
+    }
+    return saved;
+  });
+
   ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("update:status", async () => updater.getStatus());
   ipcMain.handle("update:download", async () => updater.download());
@@ -680,6 +823,35 @@ function registerIpc() {
     updater.install();
     return { ok: true };
   });
+}
+
+// Requests the free CS2 license for an account created by the signup flow. The Steam Guard
+// code is read from the saved mailbox, so without one the request is skipped. Returns a short
+// note for the sign-in message. Skipped if Steam's client is signed in as this account, since a
+// second login could disconnect it.
+async function requestSignupLicense(login, steamId64) {
+  const activeId = await steamClient.activeSteamId64().catch(() => null);
+  if (activeId === steamId64) {
+    return "CS2 license not requested: this account is signed in to the Steam client. Sign it out there and try again.";
+  }
+  const mail = tokenVault().getMailSettings();
+  if (!mail) {
+    return "CS2 license not requested: save the mailbox login so the Steam Guard code can be read.";
+  }
+  const since = Date.now() - signupHelper.STEAM_CODE_LOOKBACK_MS;
+  const requestCs2License = createFreeLicenseRequester({ SteamUser });
+  try {
+    const outcome = await requestCs2License({
+      accountName: login.accountName,
+      password: login.password,
+      getGuardCode: () => signupHelper.waitForMailCode(mail, since),
+    });
+    return outcome.granted
+      ? "CS2 license granted."
+      : "Steam returned no new CS2 license (the account may already have one).";
+  } catch (error) {
+    return `CS2 license not granted: ${error.message}`;
+  }
 }
 
 // Checks GitHub Releases for a newer build (packaged builds only). See updater.cjs.
@@ -696,28 +868,46 @@ const loginDrafts = new Map();
 // Credentials from the last completed signup, kept until its sign-in finishes (matched by
 // pendingId), so the new account's panel can be filled in.
 let pendingSignupLogin = null;
+// Logins of sign-ins still waiting for Steam Guard, keyed by pendingId: { accountName, password }.
+// Cleared on lock.
+const pendingLogins = new Map();
+
+// Returns and forgets the login for a sign-in. Signup sign-ins use the generated login.
+// Returns { accountName, password } or null.
+function takePendingLogin(pendingId) {
+  const typed = pendingLogins.get(pendingId);
+  pendingLogins.delete(pendingId);
+  if (typed !== undefined) return typed;
+  if (pendingSignupLogin && pendingSignupLogin.pendingId === pendingId) {
+    return { accountName: pendingSignupLogin.accountName, password: pendingSignupLogin.password };
+  }
+  return null;
+}
 
 const indexPath = path.join(__dirname, "..", "dist", "renderer", "index.html");
 const MAIN_WIDTH = 1100;
-const MAIN_HEIGHT = 880;
-const PANEL_WIDTH = 380;
-// The panel sits flush against the main window; its left border is the divider.
+// Preferred height of the main window. Clamped to the primary display's work area (see mainHeight).
+const MAIN_HEIGHT = 1000;
+const PANEL_WIDTH = 440;
+// The panel sits flush against the main window; its border facing the main window is the divider.
 const PANEL_GAP = 0;
 // Length of the fade-out when a window closes.
 const EXIT_FADE_MS = 150;
 
-// Fixed-size, frameless, transparent windows. The renderer draws its own title bar and
+// Fixed-size, frameless, opaque windows. The renderer draws its own title bar and
 // background, and wipes itself in and out (see Frame in shared.tsx). The window stays
 // hidden until the renderer asks for it with window:reveal.
+// Opaque: a transparent window made Windows composite every frame against the desktop, which
+// kept the GPU busy while the starfield animated. The background matches the app's dark base.
 const LOCKED_WINDOW = {
   resizable: false,
   maximizable: false,
   fullscreenable: false,
   frame: false,
-  // Transparent so the clipped wipe shows the desktop outside the window box, not an empty box.
-  transparent: true,
+  transparent: false,
+  backgroundColor: "#0b0d13",
   show: false,
-  icon: iconPath,
+  icon: process.platform === "win32" ? windowIconPath : iconPath,
 };
 
 function webPreferences() {
@@ -737,15 +927,37 @@ let panelWindow = null;
 // True while the panel is fading out, so it is not closed twice.
 let panelClosing = false;
 
+// Main window height: MAIN_HEIGHT, or the work area height when the screen is shorter.
+function mainHeight() {
+  return Math.min(MAIN_HEIGHT, screen.getPrimaryDisplay().workArea.height);
+}
+
+// The vault screens are a small window (BOX_WIDTH x BOX_HEIGHT). The main window grows to the
+// dashboard size once the vault opens (setMainBoxed). Resizing happens only at those two points.
+const BOX_WIDTH = 640;
+const BOX_HEIGHT = 440;
+
+// Resizes the main window between the vault box and the dashboard size, keeping its centre.
+// Only the main window is resized; panels and the CS2 window are not affected.
+function setMainBoxed(boxed) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const bounds = mainWindow.getBounds();
+  const width = boxed ? BOX_WIDTH : MAIN_WIDTH;
+  const height = boxed ? BOX_HEIGHT : mainHeight();
+  const x = Math.round(bounds.x + (bounds.width - width) / 2);
+  const y = Math.round(bounds.y + (bounds.height - height) / 2);
+  mainWindow.setBounds({ x, y, width, height });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     ...LOCKED_WINDOW,
     width: MAIN_WIDTH,
-    height: MAIN_HEIGHT,
+    height: mainHeight(),
     webPreferences: webPreferences(),
   });
   mainWindow.center();
-  // The attached panel follows the main window while it is dragged.
+  // The account panel follows the main window while it is dragged.
   mainWindow.on("move", placePanel);
   // Closing fades the window out in the main process; the real close follows it.
   let closing = false;
@@ -754,6 +966,7 @@ function createWindow() {
     event.preventDefault();
     closing = true;
     closePanel();
+    closeCs2();
     const win = mainWindow;
     fadeOut(win).then(() => {
       if (!win.isDestroyed()) win.close();
@@ -825,8 +1038,8 @@ function closePanel() {
   });
 }
 
-// Puts the panel beside the main window, same top and height. Opens on the left when
-// there is no room on the right of the screen.
+// Puts the panel beside the main window, same top and height. Opens on the right; it goes to
+// the left only when there is no room on the right of the screen.
 function placePanel() {
   if (!mainWindow || !panelWindow || mainWindow.isDestroyed() || panelWindow.isDestroyed()) return;
   const bounds = mainWindow.getBounds();
@@ -836,12 +1049,82 @@ function placePanel() {
   panelWindow.setBounds({ x, y: bounds.y, width: PANEL_WIDTH, height: bounds.height });
 }
 
+// The CS2 settings are a separate popup window, centred on the main window and kept inside the
+// screen's work area (above the taskbar). It does not follow the main window.
+const CS2_WIDTH = 1100;
+const CS2_HEIGHT = 640;
+let cs2Window = null;
+// True while the CS2 window is fading out, so it is not closed twice.
+let cs2Closing = false;
+
+const CS2_TABS = ["video", "crosshair", "mouse", "keybinds"];
+
+function openCs2(accountId, tab = "video") {
+  if (!mainWindow) return;
+  if (cs2Window) {
+    cs2Window.webContents.send("cs2:select", accountId);
+    cs2Window.webContents.send("cs2:tab", tab);
+    if (cs2Window.isMinimized()) cs2Window.restore();
+    cs2Window.focus();
+    return;
+  }
+  const bounds = mainWindow.getBounds();
+  const area = screen.getDisplayMatching(bounds).workArea;
+  const width = Math.min(CS2_WIDTH, area.width);
+  const height = Math.min(CS2_HEIGHT, area.height);
+  // Centred on the main window, then clamped so no edge leaves the work area.
+  const x = clamp(bounds.x + Math.round((bounds.width - width) / 2), area.x, area.x + area.width - width);
+  const y = clamp(bounds.y + Math.round((bounds.height - height) / 2), area.y, area.y + area.height - height);
+  const win = new BrowserWindow({
+    ...LOCKED_WINDOW,
+    resizable: true,
+    maximizable: false,
+    minWidth: Math.min(880, width),
+    minHeight: Math.min(480, height),
+    x,
+    y,
+    width,
+    height,
+    webPreferences: webPreferences(),
+  });
+  cs2Window = win;
+  win.on("closed", () => {
+    cs2Window = null;
+    cs2Closing = false;
+  });
+  win.loadFile(indexPath, { query: { cs2: accountId, tab } });
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function closeCs2() {
+  const win = cs2Window;
+  if (!win || win.isDestroyed() || cs2Closing) return;
+  cs2Closing = true;
+  fadeOut(win).then(() => {
+    if (!win.isDestroyed()) win.close();
+  });
+}
+
 // Title bar controls. The sender's window is the one that was clicked.
 function registerWindowControls() {
   // Shows the window once its renderer has mounted, so the wipe-in starts on screen.
   ipcMain.handle("window:reveal", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win && !win.isDestroyed()) win.show();
+  });
+  // Shrinks the main window to the vault box, or grows it to dashboard size once the vault opens.
+  ipcMain.handle("window:setMainBoxed", (_event, boxed) => {
+    setMainBoxed(boxed === true);
+  });
+  // Moves the main window by an offset in pixels. Its move event places the attached windows.
+  ipcMain.handle("window:moveGroup", (_event, dx, dy) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    const bounds = mainWindow.getBounds();
+    mainWindow.setPosition(Math.round(bounds.x + dx), Math.round(bounds.y + dy));
   });
   ipcMain.handle("window:minimize", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -856,14 +1139,44 @@ function registerWindowControls() {
   ipcMain.handle("panel:close", () => {
     closePanel();
   });
+  // Opens the CS2 window across the top for one account, or retargets it when already open.
+  // tab is one of CS2_TABS; anything else opens the video tab.
+  ipcMain.handle("cs2:open", (_event, id, tab) => {
+    const account = requireAccount(loadAccounts(), requireString(id, "Account"));
+    openCs2(account.id, CS2_TABS.includes(tab) ? tab : "video");
+  });
+  ipcMain.handle("cs2:close", () => {
+    closeCs2();
+  });
   ipcMain.handle("window:close", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
-    // The panel fades out itself; the main window plays its close animation in its close handler.
+    // The attached windows fade out themselves; the main window plays its close animation in its close handler.
     if (win === panelWindow) closePanel();
+    else if (win === cs2Window) closeCs2();
     else win.close();
   });
 }
+
+// Windows groups notifications under this id. It matches the installer's appId so
+// notifications from the installed app and from `npm start` are attributed the same way.
+app.setAppUserModelId("local.steamaccounthelper");
+
+// In dev (`npm start`) Windows has no installed shortcut for this AUMID, so toasts show
+// "Electron" and its logo. Registering a display name and icon for the AUMID in HKCU fixes
+// that. Packaged builds get the name and icon from the installer's Start menu shortcut.
+function registerNotificationIdentity() {
+  if (process.platform !== "win32" || app.isPackaged) return;
+  const key = "HKCU\\Software\\Classes\\AppUserModelId\\local.steamaccounthelper";
+  const icon = path.resolve(iconPath);
+  try {
+    execFileSync("reg", ["add", key, "/v", "DisplayName", "/t", "REG_SZ", "/d", "Nyx", "/f"], { windowsHide: true });
+    execFileSync("reg", ["add", key, "/v", "IconUri", "/t", "REG_SZ", "/d", icon, "/f"], { windowsHide: true });
+  } catch (error) {
+    console.warn(`[notify] could not register notification identity: ${error.message}`);
+  }
+}
+registerNotificationIdentity();
 
 app.whenReady().then(() => {
   // Removes the File / Edit / View / Window menu bar.
@@ -888,6 +1201,7 @@ app.whenReady().then(() => {
     }
   }, ACTIVE_POLL_MS);
   setInterval(() => refreshCooldowns().catch(() => {}), AUTO_REFRESH_MS);
+  setInterval(checkCooldownEndings, COOLDOWN_CHECK_MS);
   updater.start();
 });
 

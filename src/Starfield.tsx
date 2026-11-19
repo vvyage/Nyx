@@ -23,6 +23,12 @@ const PUSH_PX = 10;
 const GLOW = 0.5;
 // How quickly a star's displacement and glow follow the pointer (0 to 1 per frame).
 const EASE = 0.08;
+// Redraw rate cap. Stars move at most ~20 px/s, so 30 fps looks smooth and halves the work
+// of a 60 Hz loop. Movement uses real elapsed time, so the speed does not change.
+const FRAME_MS = 1000 / 30;
+// Stars are 1 to 2 px dots; a bitmap above 1x DPR costs far more pixels to clear and
+// composite without a visible gain.
+const MAX_DPR = 1;
 
 // Slow drifting starfield on a canvas behind the window content. Stars near the cursor glow
 // slightly and drift a few pixels away, then settle back. Respects prefers-reduced-motion by
@@ -41,6 +47,7 @@ export function Starfield() {
     let height = 0;
     let stars: Star[] = [];
     let raf = 0;
+    let running = false;
     let last = performance.now();
     // Pointer position in canvas coordinates, or null when outside the window.
     let pointer: { x: number; y: number } | null = null;
@@ -63,15 +70,17 @@ export function Starfield() {
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
       width = rect.width;
       height = rect.height;
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // About one star per 9000 px^2, capped so the frame stays cheap
+      // About one star per 9000 px^2, capped so the frame stays cheap. Existing stars are kept
+      // so a resize does not reshuffle the field.
       const count = Math.min(160, Math.round((width * height) / 9000));
-      stars = Array.from({ length: count }, spawn);
+      if (stars.length > count) stars.length = count;
+      while (stars.length < count) stars.push(spawn());
       if (reduceMotion) draw(performance.now());
     };
 
@@ -107,7 +116,12 @@ export function Starfield() {
     };
 
     const frame = (now: number) => {
-      const dt = Math.min((now - last) / 1000, 0.05);
+      raf = requestAnimationFrame(frame);
+      const elapsed = now - last;
+      // Skip frames that come before the 30 fps interval. The few ms of tolerance stop
+      // display-clock jitter from dropping a frame that is almost on time.
+      if (elapsed < FRAME_MS - 4) return;
+      const dt = Math.min(elapsed / 1000, 0.05);
       last = now;
       for (const star of stars) {
         // Drift down and to the left, wrapping at the edges
@@ -130,7 +144,6 @@ export function Starfield() {
         star.offsetY += (targetY - star.offsetY) * EASE;
       }
       draw(now);
-      raf = requestAnimationFrame(frame);
     };
 
     const onMove = (event: MouseEvent) => {
@@ -142,19 +155,45 @@ export function Starfield() {
       if (event.relatedTarget === null) pointer = null;
     };
 
+    // Animate only while the window is shown and focused. A hidden, minimized, or unfocused
+    // window keeps its last frame on the canvas, so it looks still and costs nothing.
+    const start = () => {
+      if (running) return;
+      running = true;
+      last = performance.now();
+      raf = requestAnimationFrame(frame);
+    };
+    const stop = () => {
+      running = false;
+      cancelAnimationFrame(raf);
+    };
+    const sync = () => {
+      if (!document.hidden && document.hasFocus()) start();
+      else stop();
+    };
+
+    // Watch the canvas itself: the vault box grows with a CSS transition, which does not fire
+    // the window resize event, and a stale bitmap size stretches the stars into ovals.
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas);
     resize();
-    window.addEventListener("resize", resize);
     if (!reduceMotion) {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseout", onLeave);
-      raf = requestAnimationFrame(frame);
+      document.addEventListener("visibilitychange", sync);
+      window.addEventListener("focus", sync);
+      window.addEventListener("blur", sync);
+      sync();
     }
 
     return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
+      stop();
+      observer.disconnect();
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseout", onLeave);
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
     };
   }, []);
 

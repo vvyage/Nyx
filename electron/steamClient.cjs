@@ -154,4 +154,5 @@ module.exports = {
   activeSteamId64,
   signInAccount,
   steamDir,
+  isSteamRunning,
 };
